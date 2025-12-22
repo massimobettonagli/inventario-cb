@@ -17,22 +17,33 @@ function chunk<T>(arr: T[], size: number) {
   return out;
 }
 
-// ✅ limita concorrenza senza dipendenze
-async function asyncPool<T, R>(poolLimit: number, array: T[], iteratorFn: (item: T) => Promise<R>) {
+// ✅ limita concorrenza senza dipendenze (FIX TS-safe)
+async function asyncPool<T, R>(
+  poolLimit: number,
+  array: T[],
+  iteratorFn: (item: T) => Promise<R>
+) {
   const ret: Promise<R>[] = [];
-  const executing: Promise<any>[] = [];
+  const executing: Promise<void>[] = [];
+
   for (const item of array) {
-    const p = Promise.resolve().then(() => iteratorFn(item));
+    const p: Promise<R> = Promise.resolve().then(() => iteratorFn(item));
     ret.push(p);
 
     if (poolLimit <= array.length) {
-      const e = p.then(() => executing.splice(executing.indexOf(e), 1));
-      executing.push(e);
+      const tracked: Promise<void> = p.then(() => {
+        const index = executing.indexOf(tracked);
+        if (index >= 0) executing.splice(index, 1);
+      });
+
+      executing.push(tracked);
+
       if (executing.length >= poolLimit) {
         await Promise.race(executing);
       }
     }
   }
+
   return Promise.all(ret);
 }
 
