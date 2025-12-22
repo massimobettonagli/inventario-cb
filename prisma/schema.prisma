@@ -1,0 +1,172 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Prodotto {
+  id          String               @id @default(cuid())
+  codice      String               @unique
+  descrizione String
+  immagini    ImmagineProdotto[]
+  giacenze    Giacenza[]
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  movimenti   MovimentoMagazzino[]
+}
+
+model Magazzino {
+  id        String               @id @default(cuid())
+  nome      String               @unique
+  giacenze  Giacenza[]
+  createdAt DateTime             @default(now())
+  movimenti MovimentoMagazzino[]
+
+  // ✅ ordini trasferimento: back-relations
+  ordiniInUscita  OrdineTrasferimento[] @relation("OrdineDaMagazzino")
+  ordiniInEntrata OrdineTrasferimento[] @relation("OrdineAMagazzino")
+}
+
+model Giacenza {
+  id                  String   @id @default(cuid())
+  prodottoId          String
+  magazzinoId         String
+  qtyUltimoInventario Int      @default(0)
+  qtyAttuale          Int      @default(0)
+  updatedAt           DateTime @updatedAt
+
+  prodotto  Prodotto  @relation(fields: [prodottoId], references: [id], onDelete: Cascade)
+  magazzino Magazzino @relation(fields: [magazzinoId], references: [id], onDelete: Cascade)
+
+  @@unique([prodottoId, magazzinoId])
+  @@index([magazzinoId])
+}
+
+model ImmagineProdotto {
+  id         String   @id @default(cuid())
+  prodottoId String
+  url        String
+  createdAt  DateTime @default(now())
+
+  prodotto Prodotto @relation(fields: [prodottoId], references: [id], onDelete: Cascade)
+
+  @@index([prodottoId])
+}
+
+model MovimentoMagazzino {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  // Relazioni
+  prodottoId  String
+  magazzinoId String
+
+  // Dati movimento
+  codice   String // lo salviamo anche “denormalizzato” per query veloci
+  qtyPrima Int
+  qtyDopo  Int
+
+  prodotto  Prodotto  @relation(fields: [prodottoId], references: [id], onDelete: Cascade)
+  magazzino Magazzino @relation(fields: [magazzinoId], references: [id], onDelete: Cascade)
+
+  @@index([createdAt])
+  @@index([magazzinoId, createdAt])
+  @@index([codice, createdAt])
+}
+
+enum StatoOrdineTrasferimento {
+  DRAFT
+  INVIATA
+  IN_LAVORAZIONE
+  CHIUSA
+}
+
+model OrdineTrasferimento {
+  id     String @id @default(cuid())
+  anno   Int
+  numero Int
+  codice String @unique
+
+  stato StatoOrdineTrasferimento @default(DRAFT)
+
+  daMagazzinoId String
+  aMagazzinoId  String
+
+  emailDestinatario String?
+  sentAt            DateTime?
+
+  // ✅ nuovo: chiusura “operativa” ordine (quando tutto preparato)
+  closedAt          DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  daMagazzino Magazzino @relation("OrdineDaMagazzino", fields: [daMagazzinoId], references: [id], onDelete: Restrict)
+  aMagazzino  Magazzino @relation("OrdineAMagazzino", fields: [aMagazzinoId], references: [id], onDelete: Restrict)
+
+  righe OrdineTrasferimentoRiga[]
+
+  @@unique([anno, numero])
+  @@index([stato])
+  @@index([daMagazzinoId])
+  @@index([aMagazzinoId])
+}
+
+model OrdineTrasferimentoRiga {
+  id       String @id @default(cuid())
+  ordineId String
+
+  codiceProdotto  String
+  descrizioneSnap String?
+  qty             Int
+
+  // ✅ nuovo: quantità preparata (progress)
+  qtyPrepared     Int      @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ordine OrdineTrasferimento @relation(fields: [ordineId], references: [id], onDelete: Cascade)
+
+  @@index([ordineId])
+  @@index([codiceProdotto])
+  @@index([ordineId, codiceProdotto])
+}
+
+model UploadFile {
+  id           String   @id @default(cuid())
+  originalName String
+  storedName   String
+  mimeType     String
+  size         Int
+  uploaderEmail String?
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model ImportUpload {
+  id            String   @id @default(cuid())
+  originalName  String
+  storedName    String
+  mimeType      String
+  size          Int
+  uploaderEmail String?
+  createdAt     DateTime @default(now())
+
+  // ✅ NUOVI (per storico import)
+  kind          String?  // es: "IMPORT_PRODOTTI"
+  magazzinoId   String?
+  magazzinoNome String?
+  rows          Int?
+  createdProducts Int?
+  updatedProducts Int?
+  upsertedGiacenze Int?
+
+  @@index([createdAt])
+  @@index([kind])
+}

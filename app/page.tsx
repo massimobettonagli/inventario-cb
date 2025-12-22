@@ -1,65 +1,186 @@
+"use client";
+
+import Link from "next/link";
 import Image from "next/image";
 
-export default function Home() {
+const BRAND_RED = "#C73A3A";
+
+type CardProps = {
+  title: string;
+  desc: string;
+  href: string;
+  variant?: "solid" | "outline";
+};
+
+function Card({ title, desc, href, variant = "solid" }: CardProps) {
+  const solid = variant === "solid";
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <Link
+      href={href}
+      style={{
+        textDecoration: "none",
+        borderRadius: 18,
+        padding: 18,
+        border: solid ? "none" : "1px solid #e2e8f0",
+        background: solid ? BRAND_RED : "white",
+        color: solid ? "white" : "#0f172a",
+        boxShadow: solid
+          ? "0 14px 30px rgba(199,58,58,0.25)"
+          : "0 10px 30px rgba(15,23,42,0.06)",
+        display: "grid",
+        gap: 8,
+        minHeight: 120,
+        transition: "transform .15s ease, box-shadow .15s ease",
+      }}
+      onMouseEnter={(e) => {
+        (e.currentTarget as HTMLElement).style.transform = "translateY(-2px)";
+      }}
+      onMouseLeave={(e) => {
+        (e.currentTarget as HTMLElement).style.transform = "translateY(0)";
+      }}
+    >
+      <div style={{ fontSize: 18, fontWeight: 950 }}>{title}</div>
+      <div style={{ opacity: solid ? 0.9 : 0.75, lineHeight: 1.4 }}>{desc}</div>
+    </Link>
+  );
+}
+
+export default function DashboardHome() {
+  async function handleLogout() {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch {
+      // anche se fallisce, mando comunque al login
+    } finally {
+      window.location.href = "/login";
+    }
+  }
+
+  return (
+    <main style={{ maxWidth: 1000, margin: "24px auto", padding: "0 16px", color: "#0f172a" }}>
+      {/* HEADER */}
+      <div
+        style={{
+          borderRadius: 18,
+          border: "1px solid #e6e6e6",
+          background: "linear-gradient(180deg, #ffffff, #fbfbfb)",
+          boxShadow: "0 10px 30px rgba(15, 23, 42, 0.06)",
+          padding: 18,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        {/* LEFT: logo + title */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <Link href="/" style={{ display: "inline-flex", alignItems: "center" }} aria-label="Home">
+  <img
+    src="/logo.png"
+    alt="CB Bettonagli"
+    width={50}
+    height={50}
+    style={{ borderRadius: 10, objectFit: "contain", display: "block" }}
+    onError={(e) => {
+      // utile per debug: se qui scatta, il file non viene trovato
+      console.error("Logo non trovato su /logo.png");
+      (e.currentTarget as HTMLImageElement).style.display = "none";
+    }}
+  />
+</Link>
+
+          <div>
+            <h1 style={{ margin: 0, fontSize: 28, fontWeight: 950 }}>Dashboard Inventario CB</h1>
+            <div style={{ marginTop: 6, opacity: 0.8 }}>
+              Scegli cosa vuoi fare: scanner, lista prodotti, statistiche, ordini.
+            </div>
+          </div>
+        </div>
+
+        {/* RIGHT: logout */}
+        <button
+          onClick={handleLogout}
+          style={{
+            padding: "10px 16px",
+            borderRadius: 999,
+            fontWeight: 950,
+            border: `1px solid ${BRAND_RED}`,
+            background: "white",
+            color: BRAND_RED,
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+            transition: "background .15s ease, color .15s ease",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = BRAND_RED;
+            e.currentTarget.style.color = "white";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "white";
+            e.currentTarget.style.color = BRAND_RED;
+          }}
+        >
+          Logout
+        </button>
+      </div>
+
+      {/* CARDS */}
+      <section
+        style={{
+          marginTop: 18,
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+          gap: 14,
+        }}
+      >
+        <Card
+          title="Scanner QR"
+          desc="Scansiona → aggiorna quantità → ritorna subito allo scanner."
+          href="/scanner"
+          variant="solid"
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+
+        <Card
+          title="Lista prodotti"
+          desc="Cerca codici e descrizioni, apri i prodotti e modifica le quantità."
+          href="/lista"
+          variant="outline"
+        />
+
+        <Card
+          title="Caricamenti / Esportazioni"
+          desc="Import prodotti, export, storico file caricati."
+          href="/caricamenti-esportazioni"
+          variant="outline"
+        />
+
+        <Card
+          title="Statistiche"
+          desc="Movimenti per periodo e ultimi codici modificati."
+          href="/statistiche"
+          variant="outline"
+        />
+
+        <Card
+          title="Ordini di magazzino"
+          desc="Crea ordini da un magazzino all’altro via scansione + quantità. Storico, stati e invio."
+          href="/ordini"
+          variant="outline"
+        />
+
+        <Card
+          title="Gestione ordini magazzino"
+          desc="Prepara gli ordini: scansiona QR, inserisci quantità preparata, stato parziale/completo e chiusura."
+          href="/ordini/prepara"
+          variant="outline"
+        />
+      </section>
+
+      <footer style={{ marginTop: 18, opacity: 0.65, fontSize: 13 }}>
+        Inventario CB • PWA • Multi-magazzino (Treviolo / Treviglio)
+      </footer>
+    </main>
   );
 }
