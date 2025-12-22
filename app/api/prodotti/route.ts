@@ -17,9 +17,9 @@ export async function GET(req: Request) {
     return NextResponse.json({ items: [], totale: 0, page, pageSize });
   }
 
-  const where: Prisma.ProdottoWhereInput = {
-    giacenze: { some: { magazzinoId } },
-  };
+  // ✅ NON filtro più "giacenze some magazzinoId"
+  // così la lista non resta vuota se la giacenza non è stata creata (import timeout ecc.)
+  const where: Prisma.ProdottoWhereInput = {};
 
   if (q) {
     where.OR = [
@@ -52,7 +52,7 @@ export async function GET(req: Request) {
       codice: p.codice,
       descrizione: p.descrizione,
       qtyAttuale: p.giacenze[0]?.qtyAttuale ?? 0,
-      thumbUrl: null, // se ti serve nel frontend, così non rompe i type
+      thumbUrl: null,
     })),
     totale,
     page,

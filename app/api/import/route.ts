@@ -1,3 +1,4 @@
+// app/api/import/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import * as XLSX from "xlsx";
@@ -14,6 +15,25 @@ function chunk<T>(arr: T[], size: number) {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
+}
+
+// ✅ limita concorrenza senza dipendenze
+async function asyncPool<T, R>(poolLimit: number, array: T[], iteratorFn: (item: T) => Promise<R>) {
+  const ret: Promise<R>[] = [];
+  const executing: Promise<any>[] = [];
+  for (const item of array) {
+    const p = Promise.resolve().then(() => iteratorFn(item));
+    ret.push(p);
+
+    if (poolLimit <= array.length) {
+      const e = p.then(() => executing.splice(executing.indexOf(e), 1));
+      executing.push(e);
+      if (executing.length >= poolLimit) {
+        await Promise.race(executing);
+      }
+    }
+  }
+  return Promise.all(ret);
 }
 
 type CleanRow = {
@@ -35,7 +55,7 @@ export async function POST(req: Request) {
     const magazzino = await prisma.magazzino.findUnique({ where: { id: magazzinoId } });
     if (!magazzino) return NextResponse.json({ error: "Magazzino non valido" }, { status: 400 });
 
-    // 1) Leggi file (xlsx/csv)
+    // 1) Leggi file
     const buf = Buffer.from(await file.arrayBuffer());
     const wb = XLSX.read(buf, { type: "buffer" });
     const sheetName = wb.SheetNames?.[0];
@@ -123,19 +143,17 @@ export async function POST(req: Request) {
       createdProducts += res.count;
     }
 
-    // 4) aggiorna descrizioni (solo codici unici)
+    // 4) aggiorna descrizioni (limito concorrenza)
     const uniqueForUpdate = codici.map((c) => {
       const first = cleaned.find((x) => x.codice === c)!;
       return { codice: c, descrizione: first.descrizione };
     });
 
-    for (const part of chunk(uniqueForUpdate, 100)) {
-      await Promise.all(
-        part.map((r) =>
-          prisma.prodotto
-            .update({ where: { codice: r.codice }, data: { descrizione: r.descrizione } })
-            .catch(() => null)
-        )
+    for (const part of chunk(uniqueForUpdate, 500)) {
+      await asyncPool(20, part, (r) =>
+        prisma.prodotto
+          .update({ where: { codice: r.codice }, data: { descrizione: r.descrizione } })
+          .catch(() => null)
       );
     }
 
@@ -146,40 +164,45 @@ export async function POST(req: Request) {
     });
     const mapId = new Map(all.map((p) => [p.codice, p.id]));
 
-    // 6) upsert giacenze
+    // 6) upsert giacenze (limito concorrenza per evitare timeout)
     let upsertedGiacenze = 0;
-    for (const part of chunk(cleaned, 200)) {
-      await Promise.all(
-        part.map((r) => {
-          const prodottoId = mapId.get(r.codice);
-          if (!prodottoId) return null;
 
-          return prisma.giacenza.upsert({
-            where: { prodottoId_magazzinoId: { prodottoId, magazzinoId } },
-            update: { qtyUltimoInventario: r.qtyUltimoInventario, qtyAttuale: r.qtyAttuale },
-            create: {
-              prodottoId,
-              magazzinoId,
-              qtyUltimoInventario: r.qtyUltimoInventario,
-              qtyAttuale: r.qtyAttuale,
-            },
-          });
-        })
-      );
-      upsertedGiacenze += part.length;
+    for (const part of chunk(cleaned, 1000)) {
+      const results = await asyncPool(20, part, async (r) => {
+        const prodottoId = mapId.get(r.codice);
+        if (!prodottoId) return false;
+
+        await prisma.giacenza.upsert({
+          where: { prodottoId_magazzinoId: { prodottoId, magazzinoId } },
+          update: {
+            qtyUltimoInventario: r.qtyUltimoInventario,
+            qtyAttuale: r.qtyAttuale,
+          },
+          create: {
+            prodottoId,
+            magazzinoId,
+            qtyUltimoInventario: r.qtyUltimoInventario,
+            qtyAttuale: r.qtyAttuale,
+          },
+        });
+
+        return true;
+      });
+
+      upsertedGiacenze += results.filter(Boolean).length;
     }
 
     const updatedProducts = Math.max(0, uniqueCount - createdProducts);
 
-    // 7) ✅ storico import su ImportUpload (campi obbligatori inclusi)
+    // 7) storico import
     try {
       await prisma.importUpload.create({
         data: {
           originalName: file.name ?? "upload",
-          storedName: file.name ?? "upload",     // non stai salvando su storage? ok uguale
+          storedName: file.name ?? "upload",
           mimeType: file.type || "application/octet-stream",
           size: Number(file.size ?? 0),
-          uploaderEmail: null, // se vuoi, qui ci metti la mail dalla sessione
+          uploaderEmail: null,
           kind: "IMPORT_PRODOTTI",
           magazzinoId,
           magazzinoNome: magazzino.nome,
@@ -191,7 +214,6 @@ export async function POST(req: Request) {
       });
     } catch (e) {
       console.error("Storico ImportUpload non salvato:", e);
-      // non blocco l'import
     }
 
     return NextResponse.json({
