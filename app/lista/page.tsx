@@ -484,7 +484,7 @@ export default function ListaProdottiPage() {
             </div>
 
             <button
-              onClick={doSearchReset}
+  	      onClick={() => doSearchReset()}
               disabled={!canSearch || loading}
               style={{
                 padding: "10px 14px",
