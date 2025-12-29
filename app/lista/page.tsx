@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 type Magazzino = { id: string; nome: string };
 
@@ -15,6 +16,9 @@ type ProdottoRow = {
 const BRAND_RED = "#C73A3A";
 const STORAGE_KEY = "magazzinoId";
 
+// ✅ salva anche la ricerca (utile su mobile)
+const STORAGE_Q_KEY = "lista_q";
+
 function BackToDashboard() {
   return (
     <Link href="/" style={{ fontWeight: 950, color: BRAND_RED, textDecoration: "none" }}>
@@ -23,7 +27,22 @@ function BackToDashboard() {
   );
 }
 
+function clampInt(v: any, def = 1) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return def;
+  return Math.floor(n);
+}
+
 export default function ListaProdottiPage() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const sp = useSearchParams();
+
+  // ✅ Parametri da URL (persistenza back/forward e refresh)
+  const magazzinoIdFromUrl = String(sp.get("magazzinoId") ?? "").trim();
+  const qFromUrl = String(sp.get("q") ?? "").trim();
+  const pageFromUrl = clampInt(sp.get("page") ?? "1", 1);
+
   const [magazzini, setMagazzini] = useState<Magazzino[]>([]);
   const [magazzinoId, setMagazzinoId] = useState<string>("");
   const [q, setQ] = useState("");
@@ -37,6 +56,11 @@ export default function ListaProdottiPage() {
 
   const abortRef = useRef<AbortController | null>(null);
 
+  // ✅ inline edit qty
+  const [editQty, setEditQty] = useState<Record<string, number>>({});
+  const [savingQty, setSavingQty] = useState<Record<string, boolean>>({});
+  const [rowMsg, setRowMsg] = useState<Record<string, string | null>>({});
+
   const canSearch = useMemo(() => Boolean(magazzinoId), [magazzinoId]);
 
   const magazzinoNome = useMemo(() => {
@@ -44,14 +68,25 @@ export default function ListaProdottiPage() {
     return m?.nome ?? "";
   }, [magazzini, magazzinoId]);
 
-  // ✅ ritorno alla lista mantenendo contesto (magazzino + ricerca)
+  // ✅ URL “stato lista” (serve per tornare indietro dal prodotto)
   const backToList = useMemo(() => {
     const p = new URLSearchParams();
     if (magazzinoId) p.set("magazzinoId", magazzinoId);
     if (q.trim()) p.set("q", q.trim());
+    if (page > 1) p.set("page", String(page));
     const qs = p.toString();
     return qs ? `/lista?${qs}` : "/lista";
-  }, [magazzinoId, q]);
+  }, [magazzinoId, q, page]);
+
+  // ✅ aggiorna l’URL senza cambiare la logica (no refresh, solo stato)
+  function syncUrl(next: { magazzinoId: string; q: string; page: number }) {
+    const p = new URLSearchParams();
+    if (next.magazzinoId) p.set("magazzinoId", next.magazzinoId);
+    if (next.q.trim()) p.set("q", next.q.trim());
+    if (next.page > 1) p.set("page", String(next.page));
+    const qs = p.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname);
+  }
 
   // carico magazzini + ripristino selezione
   useEffect(() => {
@@ -66,16 +101,37 @@ export default function ListaProdottiPage() {
 
         setMagazzini(list);
 
-        const saved = typeof window !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null;
-        if (saved && list.some((m) => m.id === saved)) {
-          setMagazzinoId(saved);
-          return;
+        // 1) priorità: URL
+        let nextMagazzino = magazzinoIdFromUrl;
+
+        // 2) fallback: localStorage
+        if (!nextMagazzino) {
+          const saved = typeof window !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null;
+          if (saved && list.some((m) => m.id === saved)) nextMagazzino = saved ?? "";
         }
 
-        if (list.length > 0) {
+        // 3) default: Treviolo o primo
+        if (!nextMagazzino && list.length > 0) {
           const treviolo = list.find((m) => m.nome === "Treviolo");
-          setMagazzinoId(treviolo?.id ?? list[0].id);
+          nextMagazzino = treviolo?.id ?? list[0].id;
         }
+
+        // imposta q da URL (fallback a localStorage)
+        let nextQ = qFromUrl;
+        if (!nextQ) {
+          const savedQ = typeof window !== "undefined" ? localStorage.getItem(STORAGE_Q_KEY) : null;
+          if (savedQ) nextQ = savedQ;
+        }
+
+        // imposta page da URL
+        const nextPage = pageFromUrl;
+
+        setMagazzinoId(nextMagazzino);
+        setQ(nextQ);
+        setPage(nextPage);
+
+        // sincronizzo URL allo stato iniziale “normalizzato”
+        syncUrl({ magazzinoId: nextMagazzino, q: nextQ, page: nextPage });
       } catch {
         if (!alive) return;
         setError("Errore caricamento magazzini");
@@ -86,10 +142,14 @@ export default function ListaProdottiPage() {
       alive = false;
       abortRef.current?.abort();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function fetchPage(targetPage: number, reset: boolean) {
-    if (!magazzinoId) return;
+  async function fetchPage(targetPage: number, reset: boolean, opts?: { magazzinoId?: string; q?: string }) {
+    const mId = (opts?.magazzinoId ?? magazzinoId).trim();
+    const query = (opts?.q ?? q).trim();
+
+    if (!mId) return;
 
     abortRef.current?.abort();
     const ac = new AbortController();
@@ -100,9 +160,9 @@ export default function ListaProdottiPage() {
 
     try {
       const params = new URLSearchParams();
-      params.set("magazzinoId", magazzinoId);
+      params.set("magazzinoId", mId);
       params.set("page", String(targetPage));
-      if (q.trim()) params.set("q", q.trim());
+      if (query) params.set("q", query);
 
       const res = await fetch(`/api/prodotti?${params.toString()}`, {
         signal: ac.signal,
@@ -116,13 +176,24 @@ export default function ListaProdottiPage() {
 
       setItems((prev) => {
         const next: ProdottoRow[] = data.items ?? [];
-        if (reset) return next;
+        const merged = reset ? next : [...prev];
 
-        const seen = new Set(prev.map((x) => x.codice));
-        const merged = [...prev];
-        for (const it of next) {
-          if (!seen.has(it.codice)) merged.push(it);
+        if (!reset) {
+          const seen = new Set(prev.map((x) => x.codice));
+          for (const it of next) {
+            if (!seen.has(it.codice)) merged.push(it);
+          }
         }
+
+        // ✅ inizializza editQty con i valori della lista
+        setEditQty((old) => {
+          const copy = { ...old };
+          for (const it of merged) {
+            if (copy[it.codice] === undefined) copy[it.codice] = Number(it.qtyAttuale ?? 0);
+          }
+          return copy;
+        });
+
         return merged;
       });
     } catch (e: any) {
@@ -133,25 +204,44 @@ export default function ListaProdottiPage() {
     }
   }
 
-  function doSearchReset() {
-    if (!magazzinoId) return;
+  function doSearchReset(next?: { magazzinoId?: string; q?: string }) {
+    const mId = (next?.magazzinoId ?? magazzinoId).trim();
+    const query = (next?.q ?? q).trim();
+
+    if (!mId) return;
+
+    // ✅ persist q (mobile)
+    try {
+      localStorage.setItem(STORAGE_KEY, mId);
+      localStorage.setItem(STORAGE_Q_KEY, query);
+    } catch {}
+
     setPage(1);
     setItems([]);
     setTotale(0);
-    fetchPage(1, true);
+
+    // ✅ aggiorna URL subito (così il back funziona sempre)
+    syncUrl({ magazzinoId: mId, q: query, page: 1 });
+
+    fetchPage(1, true, { magazzinoId: mId, q: query });
   }
 
-  // cambio magazzino: reset + pagina 1
+  // cambio magazzino: reset + pagina 1 + URL
   useEffect(() => {
     if (!magazzinoId) return;
-    doSearchReset();
+    // quando cambia magazzino “da select”, non forzo a perdere q: la mantengo
+    doSearchReset({ magazzinoId, q });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [magazzinoId]);
 
-  // paginazione
+  // paginazione (carica altri)
   useEffect(() => {
     if (!magazzinoId) return;
     if (page <= 1) return;
+
+    // ✅ aggiorna URL con nuova page (per tornare indietro identico)
+    syncUrl({ magazzinoId, q, page });
+
     fetchPage(page, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page]);
@@ -177,6 +267,40 @@ export default function ListaProdottiPage() {
     p.set("from", backToList);
     return `/scanner?${p.toString()}`;
   }, [backToList]);
+
+  async function saveQtyInline(codice: string) {
+    if (!magazzinoId) return;
+
+    const qty = Math.max(0, Math.round(Number(editQty[codice] ?? 0)));
+
+    setSavingQty((s) => ({ ...s, [codice]: true }));
+    setRowMsg((m) => ({ ...m, [codice]: null }));
+
+    try {
+      const res = await fetch("/api/giacenze", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          codice,
+          magazzinoId,
+          qtyAttuale: qty,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? "Errore salvataggio quantità");
+
+      // aggiorno UI
+      setItems((prev) => prev.map((p) => (p.codice === codice ? { ...p, qtyAttuale: qty } : p)));
+
+      setRowMsg((m) => ({ ...m, [codice]: "✅ Salvato" }));
+      window.setTimeout(() => setRowMsg((m) => ({ ...m, [codice]: null })), 1200);
+    } catch (e: any) {
+      setRowMsg((m) => ({ ...m, [codice]: `⛔ ${e?.message ?? "Errore"}` }));
+    } finally {
+      setSavingQty((s) => ({ ...s, [codice]: false }));
+    }
+  }
 
   return (
     <main style={{ maxWidth: 1050, margin: "24px auto", padding: "0 16px", color: "#0f172a" }}>
@@ -219,7 +343,7 @@ export default function ListaProdottiPage() {
             </div>
 
             <div style={{ opacity: 0.78, marginTop: 6, fontSize: 14, lineHeight: 1.4 }}>
-              Cerca per <b>codice</b> o <b>descrizione</b>. Apri il prodotto per aggiornare le quantità.
+              Cerca per <b>codice</b> o <b>descrizione</b>. Ora puoi anche aggiornare la quantità direttamente in tabella.
             </div>
           </div>
 
@@ -318,7 +442,13 @@ export default function ListaProdottiPage() {
             >
               <input
                 value={q}
-                onChange={(e) => setQ(e.target.value)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setQ(v);
+                  try {
+                    localStorage.setItem(STORAGE_Q_KEY, v);
+                  } catch {}
+                }}
                 placeholder="Cerca codice o descrizione…"
                 style={{
                   padding: "10px 12px",
@@ -334,7 +464,10 @@ export default function ListaProdottiPage() {
               <button
                 onClick={() => {
                   setQ("");
-                  doSearchReset();
+                  try {
+                    localStorage.setItem(STORAGE_Q_KEY, "");
+                  } catch {}
+                  doSearchReset({ magazzinoId, q: "" });
                 }}
                 title="Svuota"
                 style={{
@@ -429,13 +562,13 @@ export default function ListaProdottiPage() {
             </div>
           ) : (
             <div style={{ width: "100%", overflowX: "auto", WebkitOverflowScrolling: "touch", touchAction: "pan-x pan-y" }}>
-              <table style={{ width: "100%", minWidth: 820, borderCollapse: "collapse" }}>
+              <table style={{ width: "100%", minWidth: 920, borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ background: "#f8fafc", textAlign: "left" }}>
                     <th style={{ padding: 14, width: 170, fontSize: 13, letterSpacing: 0.2, opacity: 0.85 }}>Codice</th>
                     <th style={{ padding: 14, fontSize: 13, letterSpacing: 0.2, opacity: 0.85 }}>Descrizione</th>
-                    <th style={{ padding: 14, width: 140, fontSize: 13, letterSpacing: 0.2, opacity: 0.85 }}>Q.tà</th>
-                    <th style={{ padding: 14, width: 120 }}></th>
+                    <th style={{ padding: 14, width: 240, fontSize: 13, letterSpacing: 0.2, opacity: 0.85 }}>Q.tà</th>
+                    <th style={{ padding: 14, width: 160 }}></th>
                   </tr>
                 </thead>
 
@@ -445,6 +578,9 @@ export default function ListaProdottiPage() {
                       `/prodotto?codice=${encodeURIComponent(p.codice)}` +
                       `&magazzinoId=${encodeURIComponent(magazzinoId)}` +
                       `&from=${encodeURIComponent(backToList)}`;
+
+                    const v = editQty[p.codice] ?? p.qtyAttuale ?? 0;
+                    const isSaving = Boolean(savingQty[p.codice]);
 
                     return (
                       <tr key={p.codice} style={{ borderTop: "1px solid #eef2f7" }}>
@@ -456,22 +592,65 @@ export default function ListaProdottiPage() {
 
                         <td style={{ padding: 14, color: "#334155" }}>{p.descrizione}</td>
 
+                        {/* ✅ Q.tà editabile + salva */}
                         <td style={{ padding: 14 }}>
-                          <span
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              minWidth: 64,
-                              padding: "6px 10px",
-                              borderRadius: 999,
-                              fontWeight: 950,
-                              background: "rgba(199,58,58,0.08)",
-                              color: BRAND_RED,
-                            }}
-                          >
-                            {p.qtyAttuale}
-                          </span>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                            <input
+                              type="number"
+                              value={Number(v)}
+                              onChange={(e) =>
+                                setEditQty((m) => ({ ...m, [p.codice]: Number(e.target.value) }))
+                              }
+                              style={{
+                                width: 120,
+                                padding: "10px 12px",
+                                borderRadius: 12,
+                                border: "1px solid #d4d4d4",
+                                fontWeight: 950,
+                              }}
+                            />
+
+                            <button
+                              onClick={() => saveQtyInline(p.codice)}
+                              disabled={isSaving || !magazzinoId}
+                              style={{
+                                padding: "10px 12px",
+                                borderRadius: 12,
+                                border: "none",
+                                background: BRAND_RED,
+                                color: "white",
+                                fontWeight: 950,
+                                cursor: isSaving || !magazzinoId ? "not-allowed" : "pointer",
+                                opacity: isSaving || !magazzinoId ? 0.7 : 1,
+                                boxShadow: "0 10px 20px rgba(199,58,58,0.20)",
+                              }}
+                            >
+                              {isSaving ? "Salvo…" : "Salva"}
+                            </button>
+
+                            <span
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                minWidth: 64,
+                                padding: "6px 10px",
+                                borderRadius: 999,
+                                fontWeight: 950,
+                                background: "rgba(199,58,58,0.08)",
+                                color: BRAND_RED,
+                              }}
+                              title="Valore attualmente salvato"
+                            >
+                              {p.qtyAttuale}
+                            </span>
+
+                            {rowMsg[p.codice] ? (
+                              <span style={{ fontSize: 12, fontWeight: 900, opacity: 0.75 }}>
+                                {rowMsg[p.codice]}
+                              </span>
+                            ) : null}
+                          </div>
                         </td>
 
                         <td style={{ padding: 14 }}>
