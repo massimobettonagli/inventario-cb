@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 
@@ -28,6 +28,13 @@ type Ordine = {
   sentAt?: string | null;
 };
 
+type ProdottoRow = {
+  codice: string;
+  descrizione: string;
+  qtyAttuale: number;
+  thumbUrl: string | null;
+};
+
 export default function OrdineDetailPage() {
   const params = useParams<{ id: string }>();
   const ordineId = typeof params?.id === "string" ? params.id : "";
@@ -40,6 +47,17 @@ export default function OrdineDetailPage() {
   const [showSend, setShowSend] = useState(false);
   const [email, setEmail] = useState("");
   const [sending, setSending] = useState(false);
+
+  // ✅ popup inserimento manuale
+  const [showManual, setShowManual] = useState(false);
+  const [manualQ, setManualQ] = useState("");
+  const [manualSearching, setManualSearching] = useState(false);
+  const [manualErr, setManualErr] = useState<string | null>(null);
+  const [manualResults, setManualResults] = useState<ProdottoRow[]>([]);
+  const [manualSelected, setManualSelected] = useState<ProdottoRow | null>(null);
+  const [manualQty, setManualQty] = useState<number>(1);
+  const [manualAdding, setManualAdding] = useState(false);
+  const manualAbortRef = useRef<AbortController | null>(null);
 
   const righeCount = ordine?.righe?.length ?? 0;
 
@@ -60,9 +78,9 @@ export default function OrdineDetailPage() {
 
   // Scanner: consentito SOLO in DRAFT
   const scannerHref = useMemo(() => {
-    return `/scanner?from=${encodeURIComponent(
-      `/ordini/${ordineId}`
-    )}&mode=ordine&ordineId=${encodeURIComponent(ordineId)}`;
+    return `/scanner?from=${encodeURIComponent(`/ordini/${ordineId}`)}&mode=ordine&ordineId=${encodeURIComponent(
+      ordineId
+    )}`;
   }, [ordineId]);
 
   async function load() {
@@ -71,14 +89,9 @@ export default function OrdineDetailPage() {
     setErr(null);
 
     try {
-      const res = await fetch(
-        `/api/ordini/${encodeURIComponent(ordineId)}?t=${Date.now()}`,
-        { cache: "no-store" }
-      );
-
+      const res = await fetch(`/api/ordini/${encodeURIComponent(ordineId)}?t=${Date.now()}`, { cache: "no-store" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error ?? "Errore caricamento ordine");
-
       setOrdine(data.ordine as Ordine);
     } catch (e: any) {
       setErr(e?.message ?? "Errore");
@@ -143,11 +156,9 @@ export default function OrdineDetailPage() {
     if (!ordineId) return;
 
     try {
-      const url = `/api/ordini/${encodeURIComponent(
-        ordineId
-      )}/document?format=pdf&t=${Date.now()}`;
-
+      const url = `/api/ordini/${encodeURIComponent(ordineId)}/document?format=pdf&t=${Date.now()}`;
       const res = await fetch(url, { cache: "no-store" });
+
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data?.error ?? "Errore download PDF");
@@ -159,10 +170,7 @@ export default function OrdineDetailPage() {
       const a = document.createElement("a");
       a.href = objectUrl;
 
-      const safeName = (ordine?.codice ?? `ordine-${ordineId}`).replace(
-        /[^\w\-]+/g,
-        "_"
-      );
+      const safeName = (ordine?.codice ?? `ordine-${ordineId}`).replace(/[^\w\-]+/g, "_");
       a.download = `${safeName}.pdf`;
 
       document.body.appendChild(a);
@@ -222,6 +230,103 @@ export default function OrdineDetailPage() {
     return "Chiuso: non modificabile. Puoi reinviare il PDF.";
   }, [ordine]);
 
+  // ✅ ricerca prodotti nella modale manuale (usa /api/prodotti)
+  async function searchManualProducts() {
+    if (!ordine?.daMagazzinoId) {
+      setManualErr("Ordine non pronto (manca magazzino di partenza).");
+      return;
+    }
+
+    const query = manualQ.trim();
+    if (!query) {
+      setManualResults([]);
+      setManualSelected(null);
+      setManualErr(null);
+      return;
+    }
+
+    manualAbortRef.current?.abort();
+    const ac = new AbortController();
+    manualAbortRef.current = ac;
+
+    setManualSearching(true);
+    setManualErr(null);
+
+    try {
+      const params = new URLSearchParams();
+      params.set("magazzinoId", ordine.daMagazzinoId);
+      params.set("q", query);
+      params.set("page", "1");
+
+      const res = await fetch(`/api/prodotti?${params.toString()}`, {
+        cache: "no-store",
+        signal: ac.signal,
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? "Errore ricerca prodotti");
+
+      const list: ProdottoRow[] = data.items ?? [];
+      setManualResults(list);
+      setManualSelected(list[0] ?? null);
+
+      if (list.length === 0) setManualErr("Nessun prodotto trovato.");
+    } catch (e: any) {
+      if (e?.name === "AbortError") return;
+      setManualErr(e?.message ?? "Errore");
+      setManualResults([]);
+      setManualSelected(null);
+    } finally {
+      setManualSearching(false);
+    }
+  }
+
+  // ✅ aggiunge la riga via nuovo endpoint /api/ordini/righe/add-manual
+  async function addManualRow() {
+    if (!ordineId) return;
+    if (!manualSelected?.codice) {
+      setManualErr("Seleziona un prodotto.");
+      return;
+    }
+
+    const qty = Number(manualQty);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      setManualErr("Quantità non valida");
+      return;
+    }
+
+    setManualAdding(true);
+    setManualErr(null);
+
+    try {
+      const res = await fetch("/api/ordini/righe/add-manual", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ordineId,
+          codiceProdotto: manualSelected.codice,
+          qty: Math.trunc(qty),
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? "Errore aggiunta riga");
+
+      await load();
+
+      // reset + chiudi
+      setShowManual(false);
+      setManualQ("");
+      setManualResults([]);
+      setManualSelected(null);
+      setManualQty(1);
+    } catch (e: any) {
+      setManualErr(e?.message ?? "Errore");
+    } finally {
+      setManualAdding(false);
+    }
+  }
+
   return (
     <main style={{ maxWidth: 1050, margin: "24px auto", padding: "0 16px", color: "#0f172a" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
@@ -267,6 +372,34 @@ export default function OrdineDetailPage() {
               Scanner (bloccato)
             </button>
           )}
+
+          {/* ✅ Inserimento manuale SOLO in DRAFT */}
+          <button
+            onClick={() => {
+              if (!canEdit) return;
+              setShowManual(true);
+              setManualErr(null);
+              setManualQ("");
+              setManualResults([]);
+              setManualSelected(null);
+              setManualQty(1);
+            }}
+            disabled={!canEdit}
+            style={{
+              padding: "10px 14px",
+              borderRadius: 12,
+              fontWeight: 950,
+              border: "1px solid #e2e8f0",
+              cursor: !canEdit ? "not-allowed" : "pointer",
+              background: "white",
+              color: "#0f172a",
+              whiteSpace: "nowrap",
+              opacity: !canEdit ? 0.6 : 1,
+            }}
+            title={!canEdit ? "Disponibile solo in bozza (DRAFT)" : "Aggiungi righe cercando per codice o descrizione"}
+          >
+            Inserisci righe manualmente
+          </button>
 
           <button
             onClick={load}
@@ -432,7 +565,11 @@ export default function OrdineDetailPage() {
                 {(ordine?.righe ?? []).length === 0 ? (
                   <tr>
                     <td colSpan={4} style={{ padding: 16, opacity: 0.75 }}>
-                      {loading ? "Caricamento…" : canEdit ? "Nessuna riga. Vai su Scanner per aggiungere." : "Nessuna riga."}
+                      {loading
+                        ? "Caricamento…"
+                        : canEdit
+                        ? "Nessuna riga. Vai su Scanner o Inserimento manuale."
+                        : "Nessuna riga."}
                     </td>
                   </tr>
                 ) : (
@@ -507,6 +644,187 @@ export default function OrdineDetailPage() {
       </section>
 
       <footer style={{ marginTop: 16, opacity: 0.65, fontSize: 13 }}>Inventario CB • Ordine</footer>
+
+      {/* ✅ MODALE INSERIMENTO MANUALE */}
+      {showManual && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15,23,42,0.45)",
+            display: "grid",
+            placeItems: "center",
+            zIndex: 9999,
+            padding: 16,
+          }}
+          onClick={() => {
+            if (!manualAdding) setShowManual(false);
+          }}
+        >
+          <div
+            style={{
+              width: "100%",
+              maxWidth: 760,
+              borderRadius: 18,
+              background: "white",
+              border: "1px solid #e6e6e6",
+              boxShadow: "0 20px 50px rgba(15, 23, 42, 0.25)",
+              padding: 18,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 18, fontWeight: 950, color: "#0f172a" }}>Inserisci righe manualmente</div>
+            <div style={{ marginTop: 6, opacity: 0.75, fontWeight: 700, lineHeight: 1.4 }}>
+              Cerca per <b>codice</b> o <b>descrizione</b>, seleziona il prodotto e imposta la quantità.
+            </div>
+
+            <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <input
+                value={manualQ}
+                onChange={(e) => setManualQ(e.target.value)}
+                placeholder="es: 1SN08 / ORFS / Manicotto…"
+                style={{
+                  flex: "1 1 320px",
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  border: "1px solid #d4d4d4",
+                  fontWeight: 800,
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") searchManualProducts();
+                }}
+              />
+
+              <button
+                onClick={searchManualProducts}
+                disabled={manualSearching}
+                style={{
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  border: "none",
+                  background: BRAND_RED,
+                  color: "white",
+                  fontWeight: 950,
+                  cursor: manualSearching ? "not-allowed" : "pointer",
+                  opacity: manualSearching ? 0.75 : 1,
+                  whiteSpace: "nowrap",
+                  boxShadow: "0 10px 20px rgba(199,58,58,0.20)",
+                }}
+              >
+                {manualSearching ? "Cerco…" : "Cerca"}
+              </button>
+            </div>
+
+            {manualErr && (
+              <div style={{ marginTop: 12, padding: 12, borderRadius: 12, background: "#ffecec", color: "#8a1f1f", fontWeight: 900 }}>
+                {manualErr}
+              </div>
+            )}
+
+            <div style={{ marginTop: 12, border: "1px solid #e6e6e6", borderRadius: 14, overflow: "hidden" }}>
+              <div style={{ maxHeight: 260, overflow: "auto" }}>
+                {manualResults.length === 0 ? (
+                  <div style={{ padding: 14, opacity: 0.75 }}>
+                    {manualSearching ? "Ricerca in corso…" : "Nessun risultato. Inserisci un testo e premi Cerca."}
+                  </div>
+                ) : (
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ background: "#f8fafc", textAlign: "left" }}>
+                        <th style={{ padding: 12, width: 200, fontSize: 12, opacity: 0.8 }}>Codice</th>
+                        <th style={{ padding: 12, fontSize: 12, opacity: 0.8 }}>Descrizione</th>
+                        <th style={{ padding: 12, width: 120, fontSize: 12, opacity: 0.8 }}>Q.tà</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {manualResults.map((p) => {
+                        const active = manualSelected?.codice === p.codice;
+                        return (
+                          <tr
+                            key={p.codice}
+                            onClick={() => setManualSelected(p)}
+                            style={{
+                              cursor: "pointer",
+                              borderTop: "1px solid #eef2f7",
+                              background: active ? "rgba(199,58,58,0.06)" : "white",
+                            }}
+                          >
+                            <td style={{ padding: 12, fontWeight: 950 }}>{p.codice}</td>
+                            <td style={{ padding: 12, opacity: 0.9 }}>{p.descrizione}</td>
+                            <td style={{ padding: 12, fontWeight: 900 }}>{Number(p.qtyAttuale ?? 0)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+
+            <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ opacity: 0.75, fontWeight: 800 }}>
+                Selezionato: <b>{manualSelected ? manualSelected.codice : "—"}</b>
+              </div>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                <input
+                  type="number"
+                  value={manualQty}
+                  min={1}
+                  onChange={(e) => setManualQty(Number(e.target.value))}
+                  style={{
+                    width: 140,
+                    padding: "12px 14px",
+                    borderRadius: 12,
+                    border: "1px solid #d4d4d4",
+                    fontWeight: 900,
+                  }}
+                />
+
+                <button
+                  onClick={addManualRow}
+                  disabled={!manualSelected || manualAdding}
+                  style={{
+                    padding: "12px 14px",
+                    borderRadius: 12,
+                    border: "none",
+                    background: BRAND_RED,
+                    color: "white",
+                    fontWeight: 950,
+                    cursor: !manualSelected || manualAdding ? "not-allowed" : "pointer",
+                    opacity: !manualSelected || manualAdding ? 0.7 : 1,
+                    whiteSpace: "nowrap",
+                    boxShadow: "0 10px 20px rgba(199,58,58,0.20)",
+                  }}
+                >
+                  {manualAdding ? "Aggiungo…" : "Aggiungi riga"}
+                </button>
+
+                <button
+                  onClick={() => setShowManual(false)}
+                  disabled={manualAdding}
+                  style={{
+                    padding: "12px 14px",
+                    borderRadius: 12,
+                    border: "1px solid #e2e8f0",
+                    background: "white",
+                    fontWeight: 950,
+                    cursor: manualAdding ? "not-allowed" : "pointer",
+                    opacity: manualAdding ? 0.6 : 1,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Chiudi
+                </button>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7, fontWeight: 700 }}>
+              Nota: se il codice è già presente nell’ordine, la quantità verrà <b>incrementata</b>.
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* POPUP INVIO EMAIL */}
       {showSend && (
