@@ -86,9 +86,11 @@ enum StatoOrdineTrasferimento {
 }
 
 model OrdineTrasferimento {
-  id     String @id @default(cuid())
-  anno   Int
-  numero Int
+  id       String @id @default(cuid())
+  anno     Int
+  numero   Int
+  suffisso Int    @default(0) // ✅ 0 = base, 1 = .1, 2 = .2, ecc.
+
   codice String @unique
 
   stato StatoOrdineTrasferimento @default(DRAFT)
@@ -98,9 +100,10 @@ model OrdineTrasferimento {
 
   emailDestinatario String?
   sentAt            DateTime?
-
-  // ✅ nuovo: chiusura “operativa” ordine (quando tutto preparato)
   closedAt          DateTime?
+
+  // ✅ NUOVO: data/ora “Spedito” (vale per l’intero ordine)
+  shippedAt         DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -110,10 +113,11 @@ model OrdineTrasferimento {
 
   righe OrdineTrasferimentoRiga[]
 
-  @@unique([anno, numero])
+  @@unique([anno, numero, suffisso])
   @@index([stato])
   @@index([daMagazzinoId])
   @@index([aMagazzinoId])
+  @@index([shippedAt])
 }
 
 model OrdineTrasferimentoRiga {
@@ -124,11 +128,14 @@ model OrdineTrasferimentoRiga {
   descrizioneSnap String?
   qty             Int
 
-  // ✅ nuovo: quantità preparata (progress)
+  // ✅ quantità preparata (progress)
   qtyPrepared     Int      @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // ❌ RIMOSSO: shippedAt qui non serve (lo vuoi sull’ordine)
+  // shippedAt DateTime?
 
   ordine OrdineTrasferimento @relation(fields: [ordineId], references: [id], onDelete: Cascade)
 
@@ -138,18 +145,6 @@ model OrdineTrasferimentoRiga {
 }
 
 model UploadFile {
-  id           String   @id @default(cuid())
-  originalName String
-  storedName   String
-  mimeType     String
-  size         Int
-  uploaderEmail String?
-  createdAt    DateTime @default(now())
-
-  @@index([createdAt])
-}
-
-model ImportUpload {
   id            String   @id @default(cuid())
   originalName  String
   storedName    String
@@ -158,14 +153,26 @@ model ImportUpload {
   uploaderEmail String?
   createdAt     DateTime @default(now())
 
-  // ✅ NUOVI (per storico import)
-  kind          String?  // es: "IMPORT_PRODOTTI"
-  magazzinoId   String?
-  magazzinoNome String?
-  rows          Int?
-  createdProducts Int?
-  updatedProducts Int?
-  upsertedGiacenze Int?
+  @@index([createdAt])
+}
+
+model ImportUpload {
+  id              String   @id @default(cuid())
+  originalName    String
+  storedName      String
+  mimeType        String
+  size            Int
+  uploaderEmail   String?
+  createdAt       DateTime @default(now())
+
+  // ✅ storico import
+  kind              String?  // es: "IMPORT_PRODOTTI"
+  magazzinoId       String?
+  magazzinoNome     String?
+  rows              Int?
+  createdProducts   Int?
+  updatedProducts   Int?
+  upsertedGiacenze  Int?
 
   @@index([createdAt])
   @@index([kind])

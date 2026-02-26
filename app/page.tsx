@@ -77,19 +77,18 @@ export default function DashboardHome() {
         {/* LEFT: logo + title */}
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <Link href="/" style={{ display: "inline-flex", alignItems: "center" }} aria-label="Home">
-  <img
-    src="/logo.png"
-    alt="CB Bettonagli"
-    width={50}
-    height={50}
-    style={{ borderRadius: 10, objectFit: "contain", display: "block" }}
-    onError={(e) => {
-      // utile per debug: se qui scatta, il file non viene trovato
-      console.error("Logo non trovato su /logo.png");
-      (e.currentTarget as HTMLImageElement).style.display = "none";
-    }}
-  />
-</Link>
+            <img
+              src="/logo.png"
+              alt="CB Bettonagli"
+              width={50}
+              height={50}
+              style={{ borderRadius: 10, objectFit: "contain", display: "block" }}
+              onError={(e) => {
+                console.error("Logo non trovato su /logo.png");
+                (e.currentTarget as HTMLImageElement).style.display = "none";
+              }}
+            />
+          </Link>
 
           <div>
             <h1 style={{ margin: 0, fontSize: 28, fontWeight: 950 }}>Dashboard Inventario CB</h1>
@@ -174,6 +173,14 @@ export default function DashboardHome() {
           title="Gestione ordini magazzino"
           desc="Prepara gli ordini: scansiona QR, inserisci quantità preparata, stato parziale/completo e chiusura."
           href="/ordini/prepara"
+          variant="outline"
+        />
+
+        {/* ✅ NUOVA CARD */}
+        <Card
+          title="Storico articoli spediti"
+          desc="Tabella cronologica di tutti gli articoli spediti. Cerca per codice o descrizione e vedi le ultime date di spedizione."
+          href="/dashboard/storico-articoli-spediti"
           variant="outline"
         />
       </section>

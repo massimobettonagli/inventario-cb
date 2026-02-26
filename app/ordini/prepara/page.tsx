@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
 const BRAND_RED = "#C73A3A";
@@ -13,6 +13,7 @@ type OrdineListItem = {
   stato: "DRAFT" | "INVIATA" | "IN_LAVORAZIONE" | "CHIUSA";
   createdAt: string;
   closedAt?: string | null;
+  shippedAt?: string | null;
   daMagazzino: Magazzino;
   aMagazzino: Magazzino;
   _count: { righe: number };
@@ -25,7 +26,6 @@ type RigaDettaglio = {
   qty: number;
   qtyPrepared: number;
   createdAt: string;
-  updatedAt?: string;
 };
 
 type OrdineDettaglio = {
@@ -34,6 +34,7 @@ type OrdineDettaglio = {
   stato: "DRAFT" | "INVIATA" | "IN_LAVORAZIONE" | "CHIUSA";
   createdAt: string;
   closedAt?: string | null;
+  shippedAt?: string | null;
   daMagazzinoId: string;
   aMagazzinoId: string;
   daMagazzino: Magazzino;
@@ -52,20 +53,31 @@ function prettyDate(d: string | null | undefined) {
 
 function StatoBadge({ stato }: { stato: OrdineListItem["stato"] | OrdineDettaglio["stato"] }) {
   const style: React.CSSProperties = useMemo(() => {
-    if (stato === "IN_LAVORAZIONE") return { background: "rgba(199,58,58,0.10)", color: BRAND_RED, border: "1px solid rgba(199,58,58,0.25)" };
-    if (stato === "CHIUSA") return { background: "rgba(15,23,42,0.08)", color: "#0f172a", border: "1px solid rgba(15,23,42,0.15)" };
-    if (stato === "INVIATA") return { background: "rgba(2,132,199,0.10)", color: "#0284c7", border: "1px solid rgba(2,132,199,0.25)" };
+    if (stato === "IN_LAVORAZIONE")
+      return { background: "rgba(199,58,58,0.10)", color: BRAND_RED, border: "1px solid rgba(199,58,58,0.25)" };
+    if (stato === "CHIUSA")
+      return { background: "rgba(15,23,42,0.08)", color: "#0f172a", border: "1px solid rgba(15,23,42,0.15)" };
+    if (stato === "INVIATA")
+      return { background: "rgba(2,132,199,0.10)", color: "#0284c7", border: "1px solid rgba(2,132,199,0.25)" };
     return { background: "rgba(148,163,184,0.18)", color: "#334155", border: "1px solid rgba(148,163,184,0.30)" };
   }, [stato]);
 
   const label =
-    stato === "DRAFT" ? "Bozza" :
-    stato === "IN_LAVORAZIONE" ? "Da preparare" :
-    stato === "INVIATA" ? "Inviata" :
-    "Chiusa";
+    stato === "DRAFT" ? "Bozza" : stato === "IN_LAVORAZIONE" ? "Da preparare" : stato === "INVIATA" ? "Inviata" : "Chiusa";
 
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 999, fontWeight: 900, fontSize: 12, ...style }}>
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "6px 10px",
+        borderRadius: 999,
+        fontWeight: 900,
+        fontSize: 12,
+        ...style,
+      }}
+    >
       ● {label}
     </span>
   );
@@ -75,15 +87,26 @@ function RigaBadge({ qty, qtyPrepared }: { qty: number; qtyPrepared: number }) {
   const done = qtyPrepared >= qty;
   const partial = qtyPrepared > 0 && qtyPrepared < qty;
 
-  const style: React.CSSProperties =
-    done ? { background: "rgba(16,185,129,0.12)", color: "#047857", border: "1px solid rgba(16,185,129,0.25)" } :
-    partial ? { background: "rgba(245,158,11,0.14)", color: "#92400e", border: "1px solid rgba(245,158,11,0.25)" } :
-    { background: "rgba(148,163,184,0.18)", color: "#334155", border: "1px solid rgba(148,163,184,0.30)" };
+  const style: React.CSSProperties = done
+    ? { background: "rgba(16,185,129,0.12)", color: "#047857", border: "1px solid rgba(16,185,129,0.25)" }
+    : partial
+    ? { background: "rgba(245,158,11,0.14)", color: "#92400e", border: "1px solid rgba(245,158,11,0.25)" }
+    : { background: "rgba(148,163,184,0.18)", color: "#334155", border: "1px solid rgba(148,163,184,0.30)" };
 
   const label = done ? "Completata" : partial ? "Parziale" : "Non iniziata";
 
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", padding: "6px 10px", borderRadius: 999, fontWeight: 900, fontSize: 12, ...style }}>
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        padding: "6px 10px",
+        borderRadius: 999,
+        fontWeight: 900,
+        fontSize: 12,
+        ...style,
+      }}
+    >
       {label}
     </span>
   );
@@ -102,16 +125,18 @@ export default function PreparaOrdiniPage() {
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
 
-  const daPreparare = useMemo(() => {
-  return storico
-    .filter((o) => o.stato === "INVIATA" || o.stato === "IN_LAVORAZIONE")
-    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-}, [storico]);
+  const [splittingRowId, setSplittingRowId] = useState<string | null>(null);
+  const [shipping, setShipping] = useState(false);
 
-  const conclusi = useMemo(
-    () => storico.filter((o) => o.stato === "CHIUSA").sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
-    [storico]
-  );
+  const daPreparare = useMemo(() => {
+    return storico
+      .filter((o) => o.stato === "INVIATA" || o.stato === "IN_LAVORAZIONE")
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  }, [storico]);
+
+  const conclusi = useMemo(() => {
+    return storico.filter((o) => o.stato === "CHIUSA").sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  }, [storico]);
 
   async function loadList() {
     setLoadingList(true);
@@ -145,21 +170,37 @@ export default function PreparaOrdiniPage() {
     }
   }
 
-  useEffect(() => { loadList(); }, []);
-  useEffect(() => { if (selectedId) loadOrdine(selectedId); }, [selectedId]);
+  useEffect(() => {
+    loadList();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (selectedId) loadOrdine(selectedId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
 
   const progress = useMemo(() => {
-    if (!ordine) return { done: 0, total: 0, pct: 0, allDone: false };
+    if (!ordine) return { done: 0, total: 0, pct: 0, anyStarted: false };
     const total = ordine.righe.length;
     const done = ordine.righe.filter((r) => (r.qtyPrepared ?? 0) >= r.qty).length;
+    const anyStarted = ordine.righe.some((r) => (r.qtyPrepared ?? 0) > 0);
     const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-    return { done, total, pct, allDone: total > 0 && done === total };
+    return { done, total, pct, anyStarted };
   }, [ordine]);
 
-  const canPrepare = ordine?.stato === "INVIATA";
-  const canClose = Boolean(ordine) && ordine!.stato === "INVIATA" && progress.allDone;
+  // ✅ coerente con backend: preparazione consentita sia in INVIATA che IN_LAVORAZIONE
+  const canPrepare = ordine?.stato === "INVIATA" || ordine?.stato === "IN_LAVORAZIONE";
 
-  // ✅ usa la tua API esistente: /api/ordini/righe/prepare (additiva)
+  // ✅ chiusura consentita in INVIATA o IN_LAVORAZIONE (almeno una riga iniziata)
+  const canClose = Boolean(ordine) && (ordine!.stato === "INVIATA" || ordine!.stato === "IN_LAVORAZIONE") && progress.anyStarted;
+
+  // ✅ spedizione: solo CHIUSA e non ancora spedito
+  const canShip = useMemo(() => {
+    if (!ordine) return false;
+    return ordine.stato === "CHIUSA" && !ordine.shippedAt;
+  }, [ordine]);
+
   async function setPreparedQty(r: RigaDettaglio, nextPrepared: number) {
     if (!ordine) return;
     if (!canPrepare) return;
@@ -206,7 +247,11 @@ export default function PreparaOrdiniPage() {
     if (!ordine) return;
     if (!canClose) return;
 
-    if (!confirm("Confermi la chiusura dell’ordine?")) return;
+    const msg =
+      "Confermi la chiusura dell’ordine?\n\n" +
+      "• Puoi chiudere anche se non è al 100%.\n" +
+      "• Le righe NON iniziate verranno spostate su un nuovo ordine (es: .1).";
+    if (!confirm(msg)) return;
 
     setClosing(true);
     try {
@@ -219,13 +264,97 @@ export default function PreparaOrdiniPage() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error ?? "Errore chiusura ordine");
 
-      alert("Ordine chiuso ✅");
+      if (data?.created?.id && data?.created?.codice) {
+        alert(
+          `Ordine chiuso ✅\n` +
+            `Chiuso come: ${data?.closedCodice ?? ordine.codice}\n` +
+            `Creato nuovo ordine: ${data.created.codice} (righe spostate: ${data.created.movedRows ?? "—"})`
+        );
+        await loadList();
+        setSelectedId(String(data.created.id));
+        return;
+      }
+
+      alert(`Ordine chiuso ✅\nChiuso come: ${data?.closedCodice ?? ordine.codice}`);
       await loadOrdine(ordine.id);
       await loadList();
     } catch (e: any) {
       alert(e?.message ?? "Errore");
     } finally {
       setClosing(false);
+    }
+  }
+
+  async function markAsShipped(ordineId: string) {
+    const ok = confirm("Confermi? Verrà salvata data e ora di spedizione.");
+    if (!ok) return;
+
+    setShipping(true);
+    try {
+      const res = await fetch("/api/ordini/ship", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ordineId }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? "Errore salvataggio spedito");
+
+      alert("Ordine segnato come spedito ✅");
+
+      await loadList();
+      if (selectedId === ordineId) await loadOrdine(ordineId);
+    } catch (e: any) {
+      alert(e?.message ?? "Errore");
+    } finally {
+      setShipping(false);
+    }
+  }
+
+  async function splitResidualToNext(riga: RigaDettaglio) {
+    if (!ordine) return;
+    if (ordine.stato !== "CHIUSA") return;
+
+    const qty = Number(riga.qty ?? 0);
+    const prep = Number(riga.qtyPrepared ?? 0);
+    const isPartial = prep > 0 && prep < qty;
+
+    if (!isPartial) {
+      alert("La riga non è parziale.");
+      return;
+    }
+
+    const ok = confirm(
+      "Confermi lo split?\n\n" +
+        `• Consegnato (rimane nel .0): ${prep}\n` +
+        `• Residuo (va nel .1): ${qty - prep}\n\n` +
+        "Questa operazione è pensata per l’ufficio."
+    );
+    if (!ok) return;
+
+    setSplittingRowId(riga.id);
+    try {
+      const res = await fetch("/api/ordini/righe/split-to-next", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ordineId: ordine.id, rigaId: riga.id }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? "Errore split residuo");
+
+      alert(
+        `Split completato ✅\n` +
+          `Residuo spostato su: ${data?.targetOrder?.codice ?? "ordine successivo"}\n` +
+          `Consegnato: ${data?.qtyDelivered ?? prep} • Residuo: ${data?.qtyResidual ?? qty - prep}`
+      );
+
+      await loadList();
+      await loadOrdine(ordine.id);
+    } catch (e: any) {
+      alert(e?.message ?? "Errore");
+    } finally {
+      setSplittingRowId(null);
     }
   }
 
@@ -269,7 +398,9 @@ export default function PreparaOrdiniPage() {
       >
         <h1 style={{ margin: 0, fontSize: 26, fontWeight: 950 }}>Gestione ordini di magazzino</h1>
         <div style={{ marginTop: 6, opacity: 0.8, fontWeight: 700, lineHeight: 1.4 }}>
-          Seleziona un ordine <b>Da preparare</b> (stato <b>IN_LAVORAZIONE</b>). Registra le quantità preparate e quando tutte le righe sono complete puoi <b>chiuderlo</b>.
+          Prepara gli ordini (INVIATA / IN_LAVORAZIONE). Puoi chiudere anche parzialmente.
+          <br />
+          Sugli ordini <b>CHIUSI</b>, l’ufficio può usare <b>Residuo → .1</b> sulle righe parziali per splittare automaticamente l’acconto.
         </div>
 
         {errList && (
@@ -282,10 +413,20 @@ export default function PreparaOrdiniPage() {
       {/* LAYOUT */}
       <section style={{ marginTop: 16, display: "grid", gridTemplateColumns: "380px 1fr", gap: 14, alignItems: "start" }}>
         {/* LISTA */}
-        <div style={{ border: "1px solid #e6e6e6", borderRadius: 18, background: "#fff", boxShadow: "0 10px 30px rgba(15, 23, 42, 0.05)", overflow: "hidden" }}>
+        <div
+          style={{
+            border: "1px solid #e6e6e6",
+            borderRadius: 18,
+            background: "#fff",
+            boxShadow: "0 10px 30px rgba(15, 23, 42, 0.05)",
+            overflow: "hidden",
+          }}
+        >
           <div style={{ padding: 14, borderBottom: "1px solid #eef2f7" }}>
             <div style={{ fontWeight: 950, fontSize: 16 }}>Ordini da preparare</div>
-            <div style={{ marginTop: 6, opacity: 0.75, fontWeight: 700, fontSize: 13 }}>Stato: <b>IN_LAVORAZIONE</b></div>
+            <div style={{ marginTop: 6, opacity: 0.75, fontWeight: 700, fontSize: 13 }}>
+              Stato: <b>INVIATA</b> / <b>IN_LAVORAZIONE</b>
+            </div>
           </div>
 
           <div style={{ padding: 10, display: "grid", gap: 10 }}>
@@ -295,9 +436,14 @@ export default function PreparaOrdiniPage() {
               daPreparare.map((o) => {
                 const active = o.id === selectedId;
                 return (
-                  <button
+                  <div
                     key={o.id}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => setSelectedId(o.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") setSelectedId(o.id);
+                    }}
                     style={{
                       textAlign: "left",
                       padding: 12,
@@ -305,6 +451,7 @@ export default function PreparaOrdiniPage() {
                       border: active ? `2px solid ${BRAND_RED}` : "1px solid #e2e8f0",
                       background: active ? "rgba(199,58,58,0.06)" : "white",
                       cursor: "pointer",
+                      outline: "none",
                     }}
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
@@ -317,7 +464,9 @@ export default function PreparaOrdiniPage() {
                     </div>
 
                     <div style={{ marginTop: 6, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                      <div style={{ opacity: 0.7, fontWeight: 700, fontSize: 12 }}>Righe: <b>{o._count.righe}</b></div>
+                      <div style={{ opacity: 0.7, fontWeight: 700, fontSize: 12 }}>
+                        Righe: <b>{o._count.righe}</b>
+                      </div>
                       <div style={{ opacity: 0.7, fontWeight: 700, fontSize: 12 }}>{prettyDate(o.createdAt)}</div>
                     </div>
 
@@ -342,7 +491,7 @@ export default function PreparaOrdiniPage() {
                         Apri scanner →
                       </Link>
                     </div>
-                  </button>
+                  </div>
                 );
               })
             )}
@@ -350,7 +499,9 @@ export default function PreparaOrdiniPage() {
 
           <div style={{ padding: 14, borderTop: "1px solid #eef2f7" }}>
             <div style={{ fontWeight: 950, fontSize: 16 }}>Ordini conclusi</div>
-            <div style={{ marginTop: 6, opacity: 0.75, fontWeight: 700, fontSize: 13 }}>Stato: <b>CHIUSA</b></div>
+            <div style={{ marginTop: 6, opacity: 0.75, fontWeight: 700, fontSize: 13 }}>
+              Stato: <b>CHIUSA</b>
+            </div>
           </div>
 
           <div style={{ padding: 10, display: "grid", gap: 10 }}>
@@ -359,10 +510,17 @@ export default function PreparaOrdiniPage() {
             ) : (
               conclusi.slice(0, 15).map((o) => {
                 const active = o.id === selectedId;
+                const shipped = Boolean(o.shippedAt);
+
                 return (
-                  <button
+                  <div
                     key={o.id}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => setSelectedId(o.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") setSelectedId(o.id);
+                    }}
                     style={{
                       textAlign: "left",
                       padding: 12,
@@ -370,6 +528,7 @@ export default function PreparaOrdiniPage() {
                       border: active ? `2px solid ${BRAND_RED}` : "1px solid #e2e8f0",
                       background: active ? "rgba(199,58,58,0.06)" : "white",
                       cursor: "pointer",
+                      outline: "none",
                     }}
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
@@ -381,19 +540,64 @@ export default function PreparaOrdiniPage() {
                       {o.daMagazzino.nome} → {o.aMagazzino.nome}
                     </div>
 
-                    <div style={{ marginTop: 6, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                      <div style={{ opacity: 0.7, fontWeight: 700, fontSize: 12 }}>Righe: <b>{o._count.righe}</b></div>
-                      <div style={{ marginTop: 6, display: "grid", gap: 4 }}>
-  <div style={{ opacity: 0.7, fontWeight: 700, fontSize: 12 }}>
-    Creato: <b>{prettyDate(o.createdAt)}</b>
-  </div>
+                    <div style={{ marginTop: 6, display: "grid", gap: 4 }}>
+                      <div style={{ opacity: 0.7, fontWeight: 700, fontSize: 12 }}>
+                        Righe: <b>{o._count.righe}</b>
+                      </div>
+                      <div style={{ opacity: 0.7, fontWeight: 700, fontSize: 12 }}>
+                        Creato: <b>{prettyDate(o.createdAt)}</b>
+                      </div>
+                      <div style={{ opacity: 0.7, fontWeight: 700, fontSize: 12 }}>
+                        Chiuso: <b>{o.closedAt ? prettyDate(o.closedAt) : "—"}</b>
+                      </div>
+                      <div style={{ opacity: 0.7, fontWeight: 700, fontSize: 12 }}>
+                        Spedito: <b>{o.shippedAt ? prettyDate(o.shippedAt) : "—"}</b>
+                      </div>
 
-  <div style={{ opacity: 0.7, fontWeight: 700, fontSize: 12 }}>
-    Chiuso: <b>{o.closedAt ? prettyDate(o.closedAt) : "—"}</b>
-  </div>
-</div>
+                      <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                        {!shipped ? (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              markAsShipped(o.id);
+                            }}
+                            disabled={shipping}
+                            style={{
+                              padding: "9px 12px",
+                              borderRadius: 12,
+                              border: "none",
+                              fontWeight: 950,
+                              cursor: shipping ? "not-allowed" : "pointer",
+                              background: "#0f172a",
+                              color: "white",
+                              opacity: shipping ? 0.65 : 1,
+                              whiteSpace: "nowrap",
+                            }}
+                            title="Segna come spedito (salva data e ora)"
+                          >
+                            Spedito
+                          </button>
+                        ) : (
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              padding: "7px 10px",
+                              borderRadius: 999,
+                              fontWeight: 900,
+                              fontSize: 12,
+                              background: "rgba(16,185,129,0.12)",
+                              color: "#047857",
+                              border: "1px solid rgba(16,185,129,0.25)",
+                            }}
+                            title="Ordine già segnato come spedito"
+                          >
+                            ✅ Spedito
+                          </span>
+                        )}
+                      </div>
                     </div>
-                  </button>
+                  </div>
                 );
               })
             )}
@@ -401,7 +605,15 @@ export default function PreparaOrdiniPage() {
         </div>
 
         {/* DETTAGLIO */}
-        <div style={{ border: "1px solid #e6e6e6", borderRadius: 18, background: "#fff", boxShadow: "0 10px 30px rgba(15, 23, 42, 0.05)", overflow: "hidden" }}>
+        <div
+          style={{
+            border: "1px solid #e6e6e6",
+            borderRadius: 18,
+            background: "#fff",
+            boxShadow: "0 10px 30px rgba(15, 23, 42, 0.05)",
+            overflow: "hidden",
+          }}
+        >
           <div style={{ padding: 14, borderBottom: "1px solid #eef2f7" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <div>
@@ -412,24 +624,50 @@ export default function PreparaOrdiniPage() {
               {ordine ? (
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   <StatoBadge stato={ordine.stato} />
-                  <button
-                    onClick={closeOrder}
-                    disabled={!canClose || closing}
-                    style={{
-                      padding: "10px 14px",
-                      borderRadius: 12,
-                      fontWeight: 950,
-                      border: "none",
-                      cursor: !canClose || closing ? "not-allowed" : "pointer",
-                      background: "#0f172a",
-                      color: "white",
-                      opacity: !canClose || closing ? 0.6 : 1,
-                      whiteSpace: "nowrap",
-                    }}
-                    title={!canClose ? "Chiudi solo quando tutte le righe sono complete" : "Chiudi ordine"}
-                  >
-                    {closing ? "Chiudo…" : "Chiudi ordine"}
-                  </button>
+
+                  {ordine.stato === "CHIUSA" ? (
+                    <button
+                      onClick={() => markAsShipped(ordine.id)}
+                      disabled={!canShip || shipping}
+                      style={{
+                        padding: "10px 14px",
+                        borderRadius: 12,
+                        fontWeight: 950,
+                        border: "none",
+                        cursor: !canShip || shipping ? "not-allowed" : "pointer",
+                        background: "#0f172a",
+                        color: "white",
+                        opacity: !canShip || shipping ? 0.6 : 1,
+                        whiteSpace: "nowrap",
+                      }}
+                      title={!canShip ? "Già spedito (o non chiuso)" : "Segna ordine come spedito"}
+                    >
+                      {shipping ? "Salvo…" : "Spedito"}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={closeOrder}
+                      disabled={!canClose || closing}
+                      style={{
+                        padding: "10px 14px",
+                        borderRadius: 12,
+                        fontWeight: 950,
+                        border: "none",
+                        cursor: !canClose || closing ? "not-allowed" : "pointer",
+                        background: "#0f172a",
+                        color: "white",
+                        opacity: !canClose || closing ? 0.6 : 1,
+                        whiteSpace: "nowrap",
+                      }}
+                      title={
+                        !canClose
+                          ? "Per chiudere devi avere almeno una riga iniziata (qtyPrepared > 0)."
+                          : "Chiudi ordine (anche parziale)"
+                      }
+                    >
+                      {closing ? "Chiudo…" : "Chiudi ordine"}
+                    </button>
+                  )}
                 </div>
               ) : null}
             </div>
@@ -437,10 +675,23 @@ export default function PreparaOrdiniPage() {
             {ordine ? (
               <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
                 <div style={{ fontSize: 18, fontWeight: 950 }}>{ordine.codice}</div>
-                <div style={{ opacity: 0.85, fontWeight: 800 }}>{ordine.daMagazzino.nome} → {ordine.aMagazzino.nome}</div>
+                <div style={{ opacity: 0.85, fontWeight: 800 }}>
+                  {ordine.daMagazzino.nome} → {ordine.aMagazzino.nome}
+                </div>
                 <div style={{ opacity: 0.7, fontWeight: 700, fontSize: 13 }}>
                   Creato: <b>{prettyDate(ordine.createdAt)}</b>
-                  {ordine.closedAt ? <> • Chiuso: <b>{prettyDate(ordine.closedAt)}</b></> : null}
+                  {ordine.closedAt ? (
+                    <>
+                      {" "}
+                      • Chiuso: <b>{prettyDate(ordine.closedAt)}</b>
+                    </>
+                  ) : null}
+                  {ordine.shippedAt ? (
+                    <>
+                      {" "}
+                      • Spedito: <b>{prettyDate(ordine.shippedAt)}</b>
+                    </>
+                  ) : null}
                 </div>
 
                 <div style={{ marginTop: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
@@ -453,15 +704,9 @@ export default function PreparaOrdiniPage() {
                   </div>
                 </div>
 
-                {!canPrepare && ordine.stato === "CHIUSA" ? (
+                {ordine.stato === "CHIUSA" ? (
                   <div style={{ marginTop: 8, opacity: 0.75, fontWeight: 800, fontSize: 13 }}>
-                    Ordine chiuso: consultazione sola lettura.
-                  </div>
-                ) : null}
-
-                {!canPrepare && ordine.stato !== "CHIUSA" ? (
-                  <div style={{ marginTop: 8, opacity: 0.75, fontWeight: 800, fontSize: 13 }}>
-                    Questa pagina lavora su ordini in <b>IN_LAVORAZIONE</b>. Stato attuale: <b>{ordine.stato}</b>.
+                    Ordine chiuso: consultazione sola lettura. (Ufficio: puoi splittare il residuo sulle righe parziali.)
                   </div>
                 ) : null}
               </div>
@@ -475,7 +720,7 @@ export default function PreparaOrdiniPage() {
           </div>
 
           <div style={{ width: "100%", overflowX: "auto", WebkitOverflowScrolling: "touch", touchAction: "pan-x pan-y" }}>
-            <table style={{ width: "100%", minWidth: 980, borderCollapse: "collapse" }}>
+            <table style={{ width: "100%", minWidth: 1080, borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ background: "#f8fafc", textAlign: "left" }}>
                   <th style={{ padding: 14, width: 220, fontSize: 13, opacity: 0.85 }}>Codice</th>
@@ -483,33 +728,60 @@ export default function PreparaOrdiniPage() {
                   <th style={{ padding: 14, width: 140, fontSize: 13, opacity: 0.85 }}>Qty richiesta</th>
                   <th style={{ padding: 14, width: 160, fontSize: 13, opacity: 0.85 }}>Qty preparata</th>
                   <th style={{ padding: 14, width: 160, fontSize: 13, opacity: 0.85 }}>Stato riga</th>
+                  <th style={{ padding: 14, width: 220, fontSize: 13, opacity: 0.85 }}>Azioni</th>
                 </tr>
               </thead>
 
               <tbody>
                 {!selectedId ? (
-                  <tr><td colSpan={5} style={{ padding: 16, opacity: 0.75 }}>Seleziona un ordine a sinistra.</td></tr>
+                  <tr>
+                    <td colSpan={6} style={{ padding: 16, opacity: 0.75 }}>
+                      Seleziona un ordine a sinistra.
+                    </td>
+                  </tr>
                 ) : loadingOrdine ? (
-                  <tr><td colSpan={5} style={{ padding: 16, opacity: 0.75 }}>Caricamento ordine…</td></tr>
+                  <tr>
+                    <td colSpan={6} style={{ padding: 16, opacity: 0.75 }}>
+                      Caricamento ordine…
+                    </td>
+                  </tr>
                 ) : !ordine ? (
-                  <tr><td colSpan={5} style={{ padding: 16, opacity: 0.75 }}>Ordine non disponibile.</td></tr>
+                  <tr>
+                    <td colSpan={6} style={{ padding: 16, opacity: 0.75 }}>
+                      Ordine non disponibile.
+                    </td>
+                  </tr>
                 ) : ordine.righe.length === 0 ? (
-                  <tr><td colSpan={5} style={{ padding: 16, opacity: 0.75 }}>Nessuna riga.</td></tr>
+                  <tr>
+                    <td colSpan={6} style={{ padding: 16, opacity: 0.75 }}>
+                      Nessuna riga.
+                    </td>
+                  </tr>
                 ) : (
                   ordine.righe.map((r) => {
-                    const disabled = !canPrepare || savingRowId === r.id || closing;
+                    const disabledInput = !canPrepare || savingRowId === r.id || closing || ordine.stato === "CHIUSA";
+
+                    const qty = Number(r.qty ?? 0);
+                    const prep = Number(r.qtyPrepared ?? 0);
+                    const isPartial = prep > 0 && prep < qty;
+                    const canSplit = ordine.stato === "CHIUSA" && isPartial && !splittingRowId;
+
                     return (
                       <tr key={r.id} style={{ borderTop: "1px solid #eef2f7" }}>
                         <td style={{ padding: 14, fontWeight: 950 }}>{r.codiceProdotto}</td>
                         <td style={{ padding: 14, opacity: 0.9 }}>{r.descrizioneSnap ?? "—"}</td>
                         <td style={{ padding: 14, fontWeight: 900 }}>{r.qty}</td>
+
                         <td style={{ padding: 14 }}>
                           <input
+                            key={`${r.id}-${r.qtyPrepared ?? 0}`}
                             type="number"
                             defaultValue={r.qtyPrepared ?? 0}
-                            disabled={disabled}
+                            disabled={disabledInput}
                             onBlur={async (e) => {
                               if (!canPrepare) return;
+                              if (ordine?.stato === "CHIUSA") return;
+
                               const v = Number((e.target as HTMLInputElement).value);
                               if (!Number.isFinite(v) || v < 0) {
                                 (e.target as HTMLInputElement).value = String(r.qtyPrepared ?? 0);
@@ -524,15 +796,43 @@ export default function PreparaOrdiniPage() {
                               borderRadius: 12,
                               border: "1px solid #d4d4d4",
                               fontWeight: 900,
-                              background: disabled ? "#f1f5f9" : "white",
-                              opacity: disabled ? 0.85 : 1,
-                              cursor: disabled ? "not-allowed" : "text",
+                              background: disabledInput ? "#f1f5f9" : "white",
+                              opacity: disabledInput ? 0.85 : 1,
+                              cursor: disabledInput ? "not-allowed" : "text",
                             }}
                           />
-                          {savingRowId === r.id ? <div style={{ marginTop: 6, fontSize: 12, fontWeight: 800, opacity: 0.75 }}>Salvo…</div> : null}
+                          {savingRowId === r.id ? (
+                            <div style={{ marginTop: 6, fontSize: 12, fontWeight: 800, opacity: 0.75 }}>Salvo…</div>
+                          ) : null}
                         </td>
+
                         <td style={{ padding: 14 }}>
                           <RigaBadge qty={r.qty} qtyPrepared={r.qtyPrepared ?? 0} />
+                        </td>
+
+                        <td style={{ padding: 14 }}>
+                          {ordine.stato === "CHIUSA" && isPartial ? (
+                            <button
+                              onClick={() => splitResidualToNext(r)}
+                              disabled={!canSplit || splittingRowId === r.id}
+                              style={{
+                                padding: "9px 12px",
+                                borderRadius: 12,
+                                border: "none",
+                                fontWeight: 950,
+                                cursor: !canSplit || splittingRowId === r.id ? "not-allowed" : "pointer",
+                                background: "#0f172a",
+                                color: "white",
+                                opacity: !canSplit || splittingRowId === r.id ? 0.65 : 1,
+                                whiteSpace: "nowrap",
+                              }}
+                              title="Sposta automaticamente il residuo su ordine successivo (es .1)"
+                            >
+                              {splittingRowId === r.id ? "Sposto…" : "Residuo → .1"}
+                            </button>
+                          ) : (
+                            <span style={{ opacity: 0.6, fontWeight: 800, fontSize: 12 }}>—</span>
+                          )}
                         </td>
                       </tr>
                     );

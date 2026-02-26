@@ -35,7 +35,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
           codiceProdotto: true,
           descrizioneSnap: true,
           qty: true,
-          qtyPrepared: true,
+          qtyPrepared: true, // ✅ valore reale (anche > qty)
           updatedAt: true,
           createdAt: true,
         },
@@ -45,13 +45,17 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
 
   if (!ordine) return bad("Ordine non trovato", 404);
 
-  // ✅ permessi: tutti vedono tutto (come hai deciso tu).
-  // ⚠️ ma per modificare (prepare/close) limiteremo dopo.
-
   const righe = ordine.righe.map((r) => {
-    const prepared = Math.max(0, Math.min(r.qtyPrepared ?? 0, r.qty));
-    const status = prepared <= 0 ? "NOT_STARTED" : prepared < r.qty ? "PARTIAL" : "DONE";
-    return { ...r, qtyPrepared: prepared, rowStatus: status };
+    const qty = Number(r.qty ?? 0);
+    const preparedRaw = Number(r.qtyPrepared ?? 0);
+
+    // ✅ NON clampare a qty: mostriamo il reale (ma impediamo negativi / NaN)
+    const prepared = Number.isFinite(preparedRaw) && preparedRaw > 0 ? preparedRaw : 0;
+
+    const status: "NOT_STARTED" | "PARTIAL" | "DONE" =
+      prepared <= 0 ? "NOT_STARTED" : prepared < qty ? "PARTIAL" : "DONE";
+
+    return { ...r, qty, qtyPrepared: prepared, rowStatus: status };
   });
 
   const preparedCount = righe.filter((r) => r.rowStatus === "DONE").length;
@@ -65,7 +69,13 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     ordine: {
       ...ordine,
       righe,
-      stats: { preparedCount, partialCount, notStartedCount, total: righe.length, isFullyPrepared },
+      stats: {
+        preparedCount,
+        partialCount,
+        notStartedCount,
+        total: righe.length,
+        isFullyPrepared,
+      },
     },
   });
 }

@@ -31,22 +31,24 @@ export async function GET(req: Request) {
   }
 
   const ordini = await prisma.ordineTrasferimento.findMany({
-    where,
-    orderBy: [{ anno: "desc" }, { numero: "desc" }],
-    take: 200,
-    select: {
-      id: true,
-      codice: true,
-      anno: true,
-      numero: true,
-      stato: true,
-      createdAt: true,
-      closedAt: true, // ✅ FONDAMENTALE
-      daMagazzino: { select: { nome: true, id: true } },
-      aMagazzino: { select: { nome: true, id: true } },
-      _count: { select: { righe: true } },
-    },
-  });
+  where,
+  orderBy: [{ anno: "desc" }, { numero: "desc" }, { suffisso: "asc" }],
+  take: 200,
+  select: {
+    id: true,
+    codice: true,
+    anno: true,
+    numero: true,
+    suffisso: true,
+    stato: true,
+    createdAt: true,
+    closedAt: true,
+    shippedAt: true, // ✅ ora esiste
+    daMagazzino: { select: { nome: true, id: true } },
+    aMagazzino: { select: { nome: true, id: true } },
+    _count: { select: { righe: true } },
+  },
+});
 
   return NextResponse.json({ ok: true, ordini });
 }

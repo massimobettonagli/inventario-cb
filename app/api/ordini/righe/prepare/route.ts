@@ -8,9 +8,13 @@ function bad(msg: string, status = 400) {
   return NextResponse.json({ ok: false, error: msg }, { status });
 }
 
-function toNumber(v: any) {
-  if (typeof v === "string") return Number(v.replace(",", "."));
-  return Number(v);
+function toNumber(v: unknown) {
+  if (typeof v === "number") return v;
+  if (typeof v === "string") {
+    const s = v.trim().replace(",", ".");
+    return Number(s);
+  }
+  return Number(v as any);
 }
 
 export async function PATCH(req: Request) {
@@ -18,25 +22,31 @@ export async function PATCH(req: Request) {
   if (!session) return bad("Non autorizzato", 401);
 
   const body = await req.json().catch(() => ({}));
+
   const ordineId = String(body?.ordineId ?? "").trim();
   const codice = String(body?.codice ?? body?.codiceProdotto ?? "").trim();
-  const add = toNumber(body?.qtyPreparedAdd ?? body?.add ?? body?.qty ?? 0);
+
+  // incremento
+  const addRaw = toNumber(body?.qtyPreparedAdd ?? body?.add ?? body?.qty ?? 0);
 
   if (!ordineId || !codice) return bad("Dati mancanti");
-  if (!Number.isFinite(add) || add <= 0) return bad("Quantità non valida");
 
-  // Leggo ordine
+  if (!Number.isFinite(addRaw)) return bad("Quantità non valida");
+  const add = Math.round(addRaw);
+  if (add <= 0) return bad("Quantità non valida");
+
+  // Leggo ordine (blocco se CHIUSA)
   const ordine = await prisma.ordineTrasferimento.findUnique({
     where: { id: ordineId },
-    select: { id: true, stato: true, daMagazzinoId: true },
+    select: { id: true, stato: true },
   });
   if (!ordine) return bad("Ordine non trovato", 404);
 
-  // ✅ Consento preparazione in INVIATA o IN_LAVORAZIONE
+  if (ordine.stato === "CHIUSA") return bad("Ordine chiuso: non modificabile", 409);
+
   if (ordine.stato !== "INVIATA" && ordine.stato !== "IN_LAVORAZIONE") {
     return bad("Ordine non preparabile in questo stato", 409);
   }
-
 
   // Trovo riga
   const riga = await prisma.ordineTrasferimentoRiga.findFirst({
@@ -45,16 +55,23 @@ export async function PATCH(req: Request) {
   });
   if (!riga) return bad("Riga non trovata per questo codice", 404);
 
-  const next = Math.min(riga.qty, (riga.qtyPrepared ?? 0) + Math.round(add));
+  const currentPrepared = Number(riga.qtyPrepared ?? 0);
+  const nextPrepared = currentPrepared + add;
 
-  // ✅ In un’unica transazione:
-  // - aggiorno qtyPrepared
-  // - se era INVIATA, appena inizio la preparazione lo porto a IN_LAVORAZIONE
+  // ✅ non clampare: salvo il reale
+  const safeNextPrepared = Number.isFinite(nextPrepared) && nextPrepared >= 0 ? nextPrepared : 0;
+
   const [updated] = await prisma.$transaction([
     prisma.ordineTrasferimentoRiga.update({
       where: { id: riga.id },
-      data: { qtyPrepared: next },
-      select: { id: true, codiceProdotto: true, qty: true, qtyPrepared: true, updatedAt: true },
+      data: { qtyPrepared: safeNextPrepared },
+      select: {
+        id: true,
+        codiceProdotto: true,
+        qty: true,
+        qtyPrepared: true,
+        updatedAt: true,
+      },
     }),
     ...(ordine.stato === "INVIATA"
       ? [
@@ -67,5 +84,9 @@ export async function PATCH(req: Request) {
       : []),
   ]);
 
-  return NextResponse.json({ ok: true, riga: updated });
+  const qtyReq = Number(updated.qty ?? 0);
+  const qtyPrep = Number(updated.qtyPrepared ?? 0);
+  const rowStatus = qtyPrep >= qtyReq ? "DONE" : qtyPrep > 0 ? "PARTIAL" : "NOT_STARTED";
+
+  return NextResponse.json({ ok: true, riga: { ...updated, rowStatus } });
 }

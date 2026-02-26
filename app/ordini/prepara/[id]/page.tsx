@@ -34,6 +34,13 @@ type Ordine = {
   };
 };
 
+type CloseResponse = {
+  ok: boolean;
+  error?: string;
+  closedCodice?: string | null;
+  created?: { id: string; codice: string; movedRows?: number } | null;
+};
+
 export default function OrdinePreparaPage() {
   const params = useParams<{ id: string }>();
   const ordineId = typeof params?.id === "string" ? params.id : "";
@@ -60,7 +67,6 @@ export default function OrdinePreparaPage() {
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  // ✅ reader tipizzato correttamente + controller stop() tipizzato
   const readerRef = useRef<BrowserQRCodeReader | null>(null);
   const controlsRef = useRef<IScannerControls | null>(null);
 
@@ -100,7 +106,6 @@ export default function OrdinePreparaPage() {
   }, [ordineId]);
 
   useEffect(() => {
-    // cleanup camera quando esci pagina
     return () => {
       try {
         controlsRef.current?.stop();
@@ -114,12 +119,17 @@ export default function OrdinePreparaPage() {
     [ordine?.stato]
   );
 
-  const canClose = useMemo(
-    () =>
-      Boolean(ordine?.stats?.isFullyPrepared) &&
-      (ordine?.stato === "INVIATA" || ordine?.stato === "IN_LAVORAZIONE"),
-    [ordine]
-  );
+  const anyStarted = useMemo(() => {
+    if (!ordine?.righe?.length) return false;
+    return ordine.righe.some((r) => (r.qtyPrepared ?? 0) > 0);
+  }, [ordine]);
+
+  const canClose = useMemo(() => {
+    if (!ordine) return false;
+    if (!(ordine.stato === "INVIATA" || ordine.stato === "IN_LAVORAZIONE")) return false;
+    if (!ordine.righe?.length) return false;
+    return anyStarted || Boolean(ordine.stats?.isFullyPrepared);
+  }, [ordine, anyStarted]);
 
   function beepScan() {
     try {
@@ -152,7 +162,7 @@ export default function OrdinePreparaPage() {
   function stop() {
     scanSessionRef.current += 1;
     try {
-      controlsRef.current?.stop(); // ✅ tipizzato
+      controlsRef.current?.stop();
     } catch {}
     controlsRef.current = null;
     setScanning(false);
@@ -166,13 +176,15 @@ export default function OrdinePreparaPage() {
     setQtyAlreadyPrepared(null);
   }
 
-  const modalMax = useMemo(() => {
+  const residualInfo = useMemo(() => {
     if (qtyRequested === null || qtyAlreadyPrepared === null) return null;
     return Math.max(0, qtyRequested - qtyAlreadyPrepared);
   }, [qtyRequested, qtyAlreadyPrepared]);
 
+  // ✅ NON clampiamo più qtyPrepared
   function applyOptimisticPrepared(code: string, add: number) {
     const qAdd = Math.max(1, Math.round(add || 1));
+
     setOrdine((prev) => {
       if (!prev) return prev;
 
@@ -182,7 +194,7 @@ export default function OrdinePreparaPage() {
         if (r.codiceProdotto !== code) return r;
         changed = true;
 
-        const nextPrepared = Math.min(r.qty, (r.qtyPrepared ?? 0) + qAdd);
+        const nextPrepared = (Number(r.qtyPrepared ?? 0) || 0) + qAdd;
         const rowStatus: Riga["rowStatus"] =
           nextPrepared >= r.qty ? "DONE" : nextPrepared > 0 ? "PARTIAL" : "NOT_STARTED";
 
@@ -227,13 +239,11 @@ export default function OrdinePreparaPage() {
       lastTsRef.current = 0;
       cooldownUntilRef.current = 0;
 
-      // se già attivo, chiudo prima
       try {
         controlsRef.current?.stop();
       } catch {}
       controlsRef.current = null;
 
-      // ✅ decodeFromVideoDevice ritorna controls con stop()
       controlsRef.current = await readerRef.current.decodeFromVideoDevice(undefined, video, async (result) => {
         if (scanSessionRef.current !== mySession) return;
         if (!result) return;
@@ -278,17 +288,19 @@ export default function OrdinePreparaPage() {
           setQtyAlreadyPrepared(prep);
           setQtyCode(code);
 
+          // se residuo = 0 consideriamo "completa" e ripartiamo (evita over-prep involontario)
           if (rem === 0) {
             flashHint("Riga già completa ✅");
             start();
             return;
           }
 
+          // se residuo = 1 shortcut +1
           if (rem === 1) {
             try {
               applyOptimisticPrepared(code, 1);
               await addPrepared(code, 1);
-              load();
+              await load();
               flashHint("+1 aggiunto ✅");
             } catch (e: any) {
               await load();
@@ -330,6 +342,7 @@ export default function OrdinePreparaPage() {
     if (!res.ok) throw new Error(data?.error ?? "Errore aggiornamento preparazione");
   }
 
+  // ✅ NON limitiamo al residuo: l'utente può inserire anche 100 su 50.
   async function confirmQty() {
     if (!qtyCode.trim()) return;
     if (!canPrepare) {
@@ -342,21 +355,13 @@ export default function OrdinePreparaPage() {
       return;
     }
 
-    const max = Math.max(0, qtyRequested - qtyAlreadyPrepared);
-    if (max <= 0) {
-      resetQtyModalState();
-      flashHint("Riga già completa ✅");
-      start();
-      return;
-    }
-
-    const q = Math.max(1, Math.min(max, Math.round(qtyValue || 1)));
+    const q = Math.max(1, Math.round(qtyValue || 1));
 
     setSavingQty(true);
     try {
       applyOptimisticPrepared(qtyCode.trim(), q);
       await addPrepared(qtyCode.trim(), q);
-      load();
+      await load();
       resetQtyModalState();
       flashHint(`+${q} salvato ✅`);
       start();
@@ -380,7 +385,7 @@ export default function OrdinePreparaPage() {
       setManualCode("");
       setManualQty(1);
 
-      load();
+      await load();
       flashHint("Aggiunto ✅");
     } catch (e: any) {
       await load();
@@ -390,7 +395,12 @@ export default function OrdinePreparaPage() {
 
   async function closeOrder() {
     if (!ordineId) return;
-    if (!confirm("Confermi chiusura ordine? Dopo non potrai più preparare.")) return;
+    if (!canClose) return;
+
+    const msg =
+      "Confermi chiusura ordine?\n\n" +
+      "Se ci sono righe NON iniziate, verrà generato automaticamente un nuovo ordine (.1) con quelle righe.";
+    if (!confirm(msg)) return;
 
     try {
       const res = await fetch("/api/ordini/close", {
@@ -398,9 +408,24 @@ export default function OrdinePreparaPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ordineId }),
       });
-      const data = await res.json().catch(() => ({}));
+
+      const data: CloseResponse = await res.json().catch(() => ({} as any));
       if (!res.ok) throw new Error(data?.error ?? "Errore chiusura ordine");
-      alert("Ordine chiuso ✅");
+
+      const closedCod = data.closedCodice ?? ordine?.codice ?? "Ordine";
+
+      if (data.created?.codice) {
+        const moved = typeof data.created.movedRows === "number" ? data.created.movedRows : null;
+        alert(
+          `Ordine chiuso ✅\n` +
+            `Chiuso come: ${closedCod}\n` +
+            `Creato nuovo ordine: ${data.created.codice}` +
+            (moved !== null ? `\nRighe spostate: ${moved}` : "")
+        );
+      } else {
+        alert(`Ordine chiuso ✅\nChiuso come: ${closedCod}`);
+      }
+
       await load();
       stop();
     } catch (e: any) {
@@ -444,7 +469,11 @@ export default function OrdinePreparaPage() {
               opacity: !canClose ? 0.6 : 1,
               whiteSpace: "nowrap",
             }}
-            title={!canClose ? "Completa tutte le righe per poter chiudere" : "Chiudi ordine"}
+            title={
+              !canClose
+                ? "Puoi chiudere quando hai iniziato almeno una riga (qtyPrepared > 0) oppure quando è tutto completo."
+                : "Chiudi ordine (split automatico righe non iniziate)"
+            }
           >
             Chiudi ordine
           </button>
@@ -653,8 +682,8 @@ export default function OrdinePreparaPage() {
             {qtyRequested !== null && qtyAlreadyPrepared !== null ? (
               <div style={{ marginTop: 10, opacity: 0.9, fontWeight: 950, lineHeight: 1.35 }}>
                 Richiesta: <span style={{ color: BRAND_RED }}>{qtyRequested}</span> • Già preparata:{" "}
-                <span style={{ color: "#0f172a" }}>{qtyAlreadyPrepared}</span> • Residuo:{" "}
-                <span style={{ color: "#0f172a" }}>{modalMax ?? 0}</span>
+                <span style={{ color: "#0f172a" }}>{qtyAlreadyPrepared}</span> • Residuo (info):{" "}
+                <span style={{ color: "#0f172a" }}>{residualInfo ?? 0}</span>
               </div>
             ) : (
               <div style={{ marginTop: 10, opacity: 0.7, fontWeight: 800, fontSize: 13 }}>
@@ -710,11 +739,9 @@ export default function OrdinePreparaPage() {
               </button>
             </div>
 
-            {modalMax !== null && modalMax > 0 ? (
-              <div style={{ marginTop: 8, fontSize: 12, opacity: 0.7, fontWeight: 800 }}>
-                Suggerimento: max consigliato <b>{modalMax}</b>
-              </div>
-            ) : null}
+            <div style={{ marginTop: 8, fontSize: 12, opacity: 0.7, fontWeight: 800 }}>
+              Nota: qui puoi inserire anche quantità maggiori della richiesta (es. scatola/rotolo).
+            </div>
 
             <div style={{ display: "flex", gap: 10, marginTop: 14, justifyContent: "flex-end", flexWrap: "wrap" }}>
               <button
