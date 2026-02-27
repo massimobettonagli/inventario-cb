@@ -38,7 +38,13 @@ export async function POST(req: Request) {
         aMagazzino: { select: { nome: true } },
         righe: {
           orderBy: { createdAt: "asc" },
-          select: { codiceProdotto: true, descrizioneSnap: true, qty: true },
+          select: {
+            codiceProdotto: true,
+            descrizioneSnap: true,
+            qty: true,
+            // ✅ FIX: aggiungo il campo nota (nel tuo schema si chiama "nota")
+            nota: true,
+          },
         },
       },
     });
@@ -54,10 +60,7 @@ export async function POST(req: Request) {
     const from = process.env.SMTP_FROM || user;
 
     if (!host || !user || !pass || !from) {
-      return bad(
-        "Configurazione SMTP mancante (SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/SMTP_FROM)",
-        500
-      );
+      return bad("Configurazione SMTP mancante (SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/SMTP_FROM)", 500);
     }
 
     const transporter = nodemailer.createTransport({
@@ -67,9 +70,6 @@ export async function POST(req: Request) {
       auth: { user, pass },
     });
 
-    // (opzionale ma utile) verifica connessione SMTP
-    // await transporter.verify();
-
     // PDF
     const { pdf, filename } = await buildOrdinePdfBuffer({
       codice: ordine.codice,
@@ -77,10 +77,10 @@ export async function POST(req: Request) {
       createdAt: ordine.createdAt,
       daMagazzino: ordine.daMagazzino,
       aMagazzino: ordine.aMagazzino,
-      righe: ordine.righe,
+      righe: ordine.righe, // ✅ ora compatibile con PdfRiga[] perché include "nota"
     });
 
-    // ✅ Nodemailer vuole Buffer (o string/stream)
+    // Nodemailer vuole Buffer (o string/stream)
     const pdfBuffer = Buffer.from(pdf);
 
     const subject = `Ordine di magazzino ${ordine.codice} • ${ordine.daMagazzino.nome} → ${ordine.aMagazzino.nome}`;
@@ -99,15 +99,14 @@ export async function POST(req: Request) {
       attachments: [
         {
           filename: `${filename}.pdf`,
-          content: pdfBuffer, // ✅ FIX
+          content: pdfBuffer,
           contentType: "application/pdf",
         },
       ],
     });
 
     // update ordine: salva invio + stato
-    const nextStato =
-      ordine.stato === "INVIATA" || ordine.stato === "CHIUSA" ? ordine.stato : "INVIATA";
+    const nextStato = ordine.stato === "INVIATA" || ordine.stato === "CHIUSA" ? ordine.stato : "INVIATA";
 
     await prisma.ordineTrasferimento.update({
       where: { id: ordineId },
@@ -120,9 +119,6 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return NextResponse.json(
-      { ok: false, error: e?.message ?? "Errore invio email" },
-      { status: 500 }
-    );
+    return NextResponse.json({ ok: false, error: e?.message ?? "Errore invio email" }, { status: 500 });
   }
 }

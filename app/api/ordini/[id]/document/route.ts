@@ -21,10 +21,7 @@ function safeName(name: string) {
     .slice(0, 80);
 }
 
-export async function GET(
-  req: NextRequest,
-  ctx: { params: Promise<{ id: string }> }
-) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = await getSessionFromCookies();
   if (!session) return bad("Non autorizzato", 401);
 
@@ -45,14 +42,20 @@ export async function GET(
       aMagazzino: { select: { nome: true } },
       righe: {
         orderBy: { createdAt: "asc" },
-        select: { codiceProdotto: true, descrizioneSnap: true, qty: true },
+        select: {
+          codiceProdotto: true,
+          descrizioneSnap: true,
+          qty: true,
+          // ✅ NUOVO: campo nota (rif. ordine fornitore)
+          nota: true,
+        },
       },
     },
   });
 
   if (!ordine) return bad("Ordine non trovato", 404);
 
-    // ---------------- PDF ----------------
+  // ---------------- PDF ----------------
   if (format === "pdf") {
     const { pdf, filename } = await buildOrdinePdfBuffer({
       codice: ordine.codice,
@@ -60,12 +63,12 @@ export async function GET(
       createdAt: ordine.createdAt,
       daMagazzino: ordine.daMagazzino,
       aMagazzino: ordine.aMagazzino,
-      righe: ordine.righe,
+      righe: ordine.righe, // ✅ ora include "nota"
     });
 
     const outName = safeName(filename || ordine.codice || `ordine-${ordineId}`);
 
-    // ✅ forza bytes su ArrayBuffer “normale” (niente SharedArrayBuffer nei tipi)
+    // ✅ forza bytes su ArrayBuffer “normale”
     const bytes = Uint8Array.from(pdf as unknown as Uint8Array);
 
     return new Response(bytes, {
@@ -82,11 +85,7 @@ export async function GET(
   if (format === "csv") {
     const lines: string[] = [];
 
-    lines.push(
-      ["CodiceOrdine", "Data", "DaMagazzino", "AMagazzino", "Stato"]
-        .map(csvEscape)
-        .join(",")
-    );
+    lines.push(["CodiceOrdine", "Data", "DaMagazzino", "AMagazzino", "Stato"].map(csvEscape).join(","));
 
     lines.push(
       [
@@ -101,11 +100,12 @@ export async function GET(
     );
 
     lines.push("");
-    lines.push(["CodiceProdotto", "Descrizione", "Qty"].map(csvEscape).join(","));
+    // ✅ aggiunta colonna Nota
+    lines.push(["CodiceProdotto", "Descrizione", "Qty", "Nota"].map(csvEscape).join(","));
 
     for (const r of ordine.righe) {
       lines.push(
-        [r.codiceProdotto, r.descrizioneSnap ?? "", String(r.qty ?? 0)]
+        [r.codiceProdotto, r.descrizioneSnap ?? "", String(r.qty ?? 0), r.nota ?? ""]
           .map(csvEscape)
           .join(",")
       );

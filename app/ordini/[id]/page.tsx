@@ -11,6 +11,7 @@ type Riga = {
   codiceProdotto: string;
   descrizioneSnap: string | null;
   qty: number;
+  nota?: string | null; // ✅ NUOVO
   createdAt: string;
 };
 
@@ -59,10 +60,16 @@ export default function OrdineDetailPage() {
   const [manualAdding, setManualAdding] = useState(false);
   const manualAbortRef = useRef<AbortController | null>(null);
 
+  // ✅ salvataggio nota (per feedback riga)
+  const [savingNotaRowId, setSavingNotaRowId] = useState<string | null>(null);
+
   const righeCount = ordine?.righe?.length ?? 0;
 
-  // ✅ modificabile SOLO in DRAFT
+  // ✅ modificabile SOLO in DRAFT (qty + delete + aggiunte)
   const canEdit = useMemo(() => ordine?.stato === "DRAFT", [ordine?.stato]);
+
+  // ✅ NOTA: sempre modificabile
+  const canEditNota = true;
 
   // ✅ invio: sempre disponibile se ordine non vuoto (anche reinvio)
   const canSend = useMemo(() => {
@@ -119,6 +126,25 @@ export default function OrdineDetailPage() {
 
     await load();
   }
+
+  // ✅ aggiorna NOTA (sempre)
+  async function updateNota(rigaId: string, nota: string) {
+  setSavingNotaRowId(rigaId);
+  try {
+    const res = await fetch("/api/ordini/righe/note", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rigaId, nota: String(nota ?? "").trim() }), // ✅ Prisma: nota
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error ?? "Errore update nota");
+
+    await load();
+  } finally {
+    setSavingNotaRowId(null);
+  }
+}
 
   async function deleteRow(rigaId: string) {
     if (!canEdit) return;
@@ -522,6 +548,10 @@ export default function OrdineDetailPage() {
             {ordine.daMagazzino.nome} → {ordine.aMagazzino.nome} • Stato: <b>{statoLabel}</b>
             <span style={{ marginLeft: 10, fontWeight: 800, opacity: 0.75 }}>• {infoEdit}</span>
 
+            <div style={{ marginTop: 6, fontWeight: 800, opacity: 0.75 }}>
+              Nota righe: <b>sempre modificabile</b> (anche dopo invio/chiusura).
+            </div>
+
             {ordine.emailDestinatario ? (
               <div style={{ marginTop: 6, fontWeight: 800, opacity: 0.75 }}>
                 Ultimo invio a: <span style={{ fontFamily: "monospace" }}>{ordine.emailDestinatario}</span>
@@ -551,12 +581,13 @@ export default function OrdineDetailPage() {
           }}
         >
           <div style={{ width: "100%", overflowX: "auto", WebkitOverflowScrolling: "touch", touchAction: "pan-x pan-y" }}>
-            <table style={{ width: "100%", minWidth: 980, borderCollapse: "collapse" }}>
+            <table style={{ width: "100%", minWidth: 1180, borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ background: "#f8fafc", textAlign: "left" }}>
                   <th style={{ padding: 14, width: 220, fontSize: 13, opacity: 0.85 }}>Codice</th>
                   <th style={{ padding: 14, fontSize: 13, opacity: 0.85 }}>Descrizione</th>
                   <th style={{ padding: 14, width: 140, fontSize: 13, opacity: 0.85 }}>Qty</th>
+                  <th style={{ padding: 14, width: 320, fontSize: 13, opacity: 0.85 }}>Nota (ordine fornitore)</th>
                   <th style={{ padding: 14, width: 180, fontSize: 13, opacity: 0.85 }}>Azioni</th>
                 </tr>
               </thead>
@@ -564,7 +595,7 @@ export default function OrdineDetailPage() {
               <tbody>
                 {(ordine?.righe ?? []).length === 0 ? (
                   <tr>
-                    <td colSpan={4} style={{ padding: 16, opacity: 0.75 }}>
+                    <td colSpan={5} style={{ padding: 16, opacity: 0.75 }}>
                       {loading
                         ? "Caricamento…"
                         : canEdit
@@ -577,6 +608,7 @@ export default function OrdineDetailPage() {
                     <tr key={r.id} style={{ borderTop: "1px solid #eef2f7" }}>
                       <td style={{ padding: 14, fontWeight: 950 }}>{r.codiceProdotto}</td>
                       <td style={{ padding: 14, opacity: 0.9 }}>{r.descrizioneSnap ?? "—"}</td>
+
                       <td style={{ padding: 14 }}>
                         <input
                           type="number"
@@ -609,6 +641,45 @@ export default function OrdineDetailPage() {
                           }}
                         />
                       </td>
+
+                      {/* ✅ NOTA sempre modificabile */}
+                      <td style={{ padding: 14 }}>
+                        <input
+                          key={`${r.id}-${r.nota ?? ""}`} // forza refresh quando arriva dal fetch
+                          type="text"
+                          defaultValue={r.nota ?? ""}
+                          disabled={!canEditNota || savingNotaRowId === r.id}
+                          placeholder="es: Rif. ordine fornitore 12345"
+                          onBlur={async (e) => {
+                            if (!canEditNota) return;
+                            const v = String((e.target as HTMLInputElement).value ?? "").trim();
+                            const old = String(r.nota ?? "").trim();
+                            if (v === old) return;
+
+                            try {
+                              await updateNota(r.id, v);
+                            } catch (err: any) {
+                              alert(err?.message ?? "Errore");
+                              await load();
+                            }
+                          }}
+                          style={{
+                            width: "100%",
+                            minWidth: 260,
+                            padding: "10px 12px",
+                            borderRadius: 12,
+                            border: "1px solid #d4d4d4",
+                            fontWeight: 800,
+                            background: savingNotaRowId === r.id ? "#f1f5f9" : "white",
+                            opacity: savingNotaRowId === r.id ? 0.85 : 1,
+                            cursor: savingNotaRowId === r.id ? "not-allowed" : "text",
+                          }}
+                        />
+                        {savingNotaRowId === r.id ? (
+                          <div style={{ marginTop: 6, fontSize: 12, fontWeight: 800, opacity: 0.7 }}>Salvo…</div>
+                        ) : null}
+                      </td>
+
                       <td style={{ padding: 14 }}>
                         <button
                           onClick={async () => {

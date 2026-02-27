@@ -12,18 +12,31 @@ type OrdineListItem = {
   codice: string;
   stato: "DRAFT" | "INVIATA" | "IN_LAVORAZIONE" | "CHIUSA";
   createdAt: string;
+
   daMagazzino: { id: string; nome: string };
   aMagazzino: { id: string; nome: string };
+
   _count: { righe: number };
 
   // 👇 necessari per capire se è stato inviato
   emailDestinatario?: string | null;
   sentAt?: string | null;
+
+  // ✅ NUOVO: quante righe hanno una nota valorizzata (per mostrare "x / righe")
+  righeNoteCount?: number;
 };
 
 function canDeleteOrdine(o: Pick<OrdineListItem, "stato" | "sentAt" | "emailDestinatario">) {
   const notSent = !o.sentAt && !o.emailDestinatario;
   return o.stato === "DRAFT" || (o.stato === "CHIUSA" && notSent);
+}
+
+function prettyDate(d: string) {
+  try {
+    return new Date(d).toLocaleString("it-IT");
+  } catch {
+    return String(d);
+  }
 }
 
 export default function OrdiniPage() {
@@ -43,7 +56,7 @@ export default function OrdiniPage() {
     (async () => {
       try {
         const res = await fetch("/api/magazzini", { cache: "no-store" });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         setMagazzini(data.magazzini ?? []);
       } catch {}
     })();
@@ -227,21 +240,25 @@ export default function OrdiniPage() {
           }}
         >
           <div style={{ width: "100%", overflowX: "auto", WebkitOverflowScrolling: "touch", touchAction: "pan-x pan-y" }}>
-            <table style={{ width: "100%", minWidth: 980, borderCollapse: "collapse" }}>
+            <table style={{ width: "100%", minWidth: 1100, borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ background: "#f8fafc", textAlign: "left" }}>
                   <th style={{ padding: 14, width: 200, fontSize: 13, opacity: 0.85 }}>Ordine</th>
                   <th style={{ padding: 14, width: 220, fontSize: 13, opacity: 0.85 }}>Da → A</th>
                   <th style={{ padding: 14, width: 140, fontSize: 13, opacity: 0.85 }}>Stato</th>
                   <th style={{ padding: 14, width: 120, fontSize: 13, opacity: 0.85 }}>Righe</th>
+
+                  {/* ✅ NUOVO */}
+                  <th style={{ padding: 14, width: 160, fontSize: 13, opacity: 0.85 }}>Note righe</th>
+
                   <th style={{ padding: 14, width: 190, fontSize: 13, opacity: 0.85 }}>Data</th>
-                  <th style={{ padding: 14, width: 220 }}></th>
+                  <th style={{ padding: 14, width: 240 }}></th>
                 </tr>
               </thead>
               <tbody>
                 {storico.length === 0 ? (
                   <tr>
-                    <td colSpan={6} style={{ padding: 16, opacity: 0.75 }}>
+                    <td colSpan={7} style={{ padding: 16, opacity: 0.75 }}>
                       {loading ? "Caricamento…" : "Nessun ordine trovato."}
                     </td>
                   </tr>
@@ -250,6 +267,10 @@ export default function OrdiniPage() {
                     const showDelete = canDeleteOrdine(o);
                     const deleting = deletingId === o.id;
 
+                    const totalRighe = Number(o._count?.righe ?? 0);
+                    const noteCountRaw = Number(o.righeNoteCount ?? 0);
+                    const noteCount = Number.isFinite(noteCountRaw) ? Math.max(0, noteCountRaw) : 0;
+
                     return (
                       <tr key={o.id} style={{ borderTop: "1px solid #eef2f7" }}>
                         <td style={{ padding: 14, fontWeight: 950 }}>{o.codice}</td>
@@ -257,11 +278,23 @@ export default function OrdiniPage() {
                           {o.daMagazzino.nome} → {o.aMagazzino.nome}
                         </td>
                         <td style={{ padding: 14, fontWeight: 900 }}>{o.stato}</td>
-                        <td style={{ padding: 14 }}>{o._count.righe}</td>
-                        <td style={{ padding: 14, opacity: 0.85 }}>{new Date(o.createdAt).toLocaleString("it-IT")}</td>
+                        <td style={{ padding: 14 }}>{totalRighe}</td>
+
+                        {/* ✅ NUOVO */}
+                        <td style={{ padding: 14, fontWeight: 900 }}>
+                          {totalRighe > 0 ? (
+                            <span style={{ opacity: 0.9 }}>
+                              {noteCount}/{totalRighe}
+                            </span>
+                          ) : (
+                            <span style={{ opacity: 0.6 }}>—</span>
+                          )}
+                        </td>
+
+                        <td style={{ padding: 14, opacity: 0.85 }}>{prettyDate(o.createdAt)}</td>
 
                         <td style={{ padding: 14 }}>
-                          <div style={{ display: "inline-flex", gap: 10, alignItems: "center" }}>
+                          <div style={{ display: "inline-flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                             <Link
                               href={`/ordini/${encodeURIComponent(o.id)}`}
                               style={{
@@ -322,6 +355,10 @@ export default function OrdiniPage() {
               </tbody>
             </table>
           </div>
+        </div>
+
+        <div style={{ marginTop: 10, opacity: 0.7, fontSize: 13, fontWeight: 700 }}>
+          Note righe = quante righe hanno una “Nota fornitore” compilata (es: rif. ordine fornitore).
         </div>
       </section>
 

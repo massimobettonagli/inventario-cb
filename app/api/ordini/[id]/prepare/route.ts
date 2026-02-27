@@ -36,6 +36,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
           descrizioneSnap: true,
           qty: true,
           qtyPrepared: true, // ✅ valore reale (anche > qty)
+          nota: true,
           updatedAt: true,
           createdAt: true,
         },

@@ -42,6 +42,7 @@ export async function GET(
             descrizioneSnap: true,
             qty: true,
             qtyPrepared: true,
+            nota: true,
             createdAt: true,
             updatedAt: true,
           },

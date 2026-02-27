@@ -131,6 +131,8 @@ model OrdineTrasferimentoRiga {
   // ✅ quantità preparata (progress)
   qtyPrepared     Int      @default(0)
 
+  nota            String?  // ✅ NUOVO: riferimento ordine fornitore
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

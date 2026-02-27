@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
 const BRAND_RED = "#C73A3A";
@@ -25,6 +25,7 @@ type RigaDettaglio = {
   descrizioneSnap: string | null;
   qty: number;
   qtyPrepared: number;
+  nota?: string | null; // ✅ NUOVO
   createdAt: string;
 };
 
@@ -128,6 +129,10 @@ export default function PreparaOrdiniPage() {
   const [splittingRowId, setSplittingRowId] = useState<string | null>(null);
   const [shipping, setShipping] = useState(false);
 
+  // ✅ stato per salvataggio note (per riga)
+  const [savingNoteRowId, setSavingNoteRowId] = useState<string | null>(null);
+  const noteDraftRef = useRef<Record<string, string>>({});
+
   const daPreparare = useMemo(() => {
     return storico
       .filter((o) => o.stato === "INVIATA" || o.stato === "IN_LAVORAZIONE")
@@ -162,9 +167,16 @@ export default function PreparaOrdiniPage() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error ?? "Errore caricamento ordine");
       setOrdine(data.ordine as OrdineDettaglio);
+
+      // ✅ aggiorno cache note draft per evitare “salti”
+      const ord = data.ordine as OrdineDettaglio;
+      const map: Record<string, string> = {};
+      for (const r of ord?.righe ?? []) map[r.id] = r.nota ?? "";
+      noteDraftRef.current = map;
     } catch (e: any) {
       setErrOrdine(e?.message ?? "Errore");
       setOrdine(null);
+      noteDraftRef.current = {};
     } finally {
       setLoadingOrdine(false);
     }
@@ -240,6 +252,31 @@ export default function PreparaOrdiniPage() {
       alert(e?.message ?? "Errore");
     } finally {
       setSavingRowId(null);
+    }
+  }
+
+  async function saveNota(rigaId: string, nextNota: string) {
+    const nota = String(nextNota ?? "").trim();
+
+    setSavingNoteRowId(rigaId);
+    try {
+      const res = await fetch("/api/ordini/righe/note", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rigaId, nota }), // ✅ Prisma: nota
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? "Errore salvataggio nota");
+
+      // ricarico ordine per avere dato “canonico”
+      if (ordine?.id) await loadOrdine(ordine.id);
+    } catch (e: any) {
+      alert(e?.message ?? "Errore salvataggio nota");
+      // rollback: ripristino draft dal server (se disponibile)
+      if (ordine?.id) await loadOrdine(ordine.id);
+    } finally {
+      setSavingNoteRowId(null);
     }
   }
 
@@ -659,11 +696,7 @@ export default function PreparaOrdiniPage() {
                         opacity: !canClose || closing ? 0.6 : 1,
                         whiteSpace: "nowrap",
                       }}
-                      title={
-                        !canClose
-                          ? "Per chiudere devi avere almeno una riga iniziata (qtyPrepared > 0)."
-                          : "Chiudi ordine (anche parziale)"
-                      }
+                      title={!canClose ? "Per chiudere devi avere almeno una riga iniziata (qtyPrepared > 0)." : "Chiudi ordine (anche parziale)"}
                     >
                       {closing ? "Chiudo…" : "Chiudi ordine"}
                     </button>
@@ -706,7 +739,7 @@ export default function PreparaOrdiniPage() {
 
                 {ordine.stato === "CHIUSA" ? (
                   <div style={{ marginTop: 8, opacity: 0.75, fontWeight: 800, fontSize: 13 }}>
-                    Ordine chiuso: consultazione sola lettura. (Ufficio: puoi splittare il residuo sulle righe parziali.)
+                    Ordine chiuso: consultazione sola lettura (ma puoi aggiornare le NOTE). (Ufficio: puoi splittare il residuo sulle righe parziali.)
                   </div>
                 ) : null}
               </div>
@@ -720,13 +753,14 @@ export default function PreparaOrdiniPage() {
           </div>
 
           <div style={{ width: "100%", overflowX: "auto", WebkitOverflowScrolling: "touch", touchAction: "pan-x pan-y" }}>
-            <table style={{ width: "100%", minWidth: 1080, borderCollapse: "collapse" }}>
+            <table style={{ width: "100%", minWidth: 1320, borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ background: "#f8fafc", textAlign: "left" }}>
                   <th style={{ padding: 14, width: 220, fontSize: 13, opacity: 0.85 }}>Codice</th>
                   <th style={{ padding: 14, fontSize: 13, opacity: 0.85 }}>Descrizione</th>
                   <th style={{ padding: 14, width: 140, fontSize: 13, opacity: 0.85 }}>Qty richiesta</th>
                   <th style={{ padding: 14, width: 160, fontSize: 13, opacity: 0.85 }}>Qty preparata</th>
+                  <th style={{ padding: 14, width: 180, fontSize: 13, opacity: 0.85 }}>Nota fornitore</th>
                   <th style={{ padding: 14, width: 160, fontSize: 13, opacity: 0.85 }}>Stato riga</th>
                   <th style={{ padding: 14, width: 220, fontSize: 13, opacity: 0.85 }}>Azioni</th>
                 </tr>
@@ -735,36 +769,42 @@ export default function PreparaOrdiniPage() {
               <tbody>
                 {!selectedId ? (
                   <tr>
-                    <td colSpan={6} style={{ padding: 16, opacity: 0.75 }}>
+                    <td colSpan={7} style={{ padding: 16, opacity: 0.75 }}>
                       Seleziona un ordine a sinistra.
                     </td>
                   </tr>
                 ) : loadingOrdine ? (
                   <tr>
-                    <td colSpan={6} style={{ padding: 16, opacity: 0.75 }}>
+                    <td colSpan={7} style={{ padding: 16, opacity: 0.75 }}>
                       Caricamento ordine…
                     </td>
                   </tr>
                 ) : !ordine ? (
                   <tr>
-                    <td colSpan={6} style={{ padding: 16, opacity: 0.75 }}>
+                    <td colSpan={7} style={{ padding: 16, opacity: 0.75 }}>
                       Ordine non disponibile.
                     </td>
                   </tr>
                 ) : ordine.righe.length === 0 ? (
                   <tr>
-                    <td colSpan={6} style={{ padding: 16, opacity: 0.75 }}>
+                    <td colSpan={7} style={{ padding: 16, opacity: 0.75 }}>
                       Nessuna riga.
                     </td>
                   </tr>
                 ) : (
                   ordine.righe.map((r) => {
-                    const disabledInput = !canPrepare || savingRowId === r.id || closing || ordine.stato === "CHIUSA";
+                    // qtyPrepared: modificabile solo in INVIATA/IN_LAVORAZIONE
+                    const disabledPrepared = !canPrepare || savingRowId === r.id || closing;
+
+                    // nota: modificabile sempre, anche in CHIUSA
+                    const disabledNote = savingNoteRowId === r.id;
 
                     const qty = Number(r.qty ?? 0);
                     const prep = Number(r.qtyPrepared ?? 0);
                     const isPartial = prep > 0 && prep < qty;
                     const canSplit = ordine.stato === "CHIUSA" && isPartial && !splittingRowId;
+
+                    const draft = noteDraftRef.current[r.id] ?? (r.nota ?? "");
 
                     return (
                       <tr key={r.id} style={{ borderTop: "1px solid #eef2f7" }}>
@@ -774,10 +814,10 @@ export default function PreparaOrdiniPage() {
 
                         <td style={{ padding: 14 }}>
                           <input
-                            key={`${r.id}-${r.qtyPrepared ?? 0}`}
+                            key={`prep-${r.id}-${r.qtyPrepared ?? 0}`}
                             type="number"
                             defaultValue={r.qtyPrepared ?? 0}
-                            disabled={disabledInput}
+                            disabled={disabledPrepared || ordine.stato === "CHIUSA"}
                             onBlur={async (e) => {
                               if (!canPrepare) return;
                               if (ordine?.stato === "CHIUSA") return;
@@ -796,12 +836,44 @@ export default function PreparaOrdiniPage() {
                               borderRadius: 12,
                               border: "1px solid #d4d4d4",
                               fontWeight: 900,
-                              background: disabledInput ? "#f1f5f9" : "white",
-                              opacity: disabledInput ? 0.85 : 1,
-                              cursor: disabledInput ? "not-allowed" : "text",
+                              background: disabledPrepared || ordine.stato === "CHIUSA" ? "#f1f5f9" : "white",
+                              opacity: disabledPrepared || ordine.stato === "CHIUSA" ? 0.85 : 1,
+                              cursor: disabledPrepared || ordine.stato === "CHIUSA" ? "not-allowed" : "text",
                             }}
                           />
                           {savingRowId === r.id ? (
+                            <div style={{ marginTop: 6, fontSize: 12, fontWeight: 800, opacity: 0.75 }}>Salvo…</div>
+                          ) : null}
+                        </td>
+
+                        {/* ✅ NOTA FORNITORE (sempre modificabile) */}
+                        <td style={{ padding: 14 }}>
+                          <input
+                            key={`note-${r.id}-${r.nota ?? ""}`}
+                            defaultValue={draft}
+                            placeholder="Rif. ordine fornitore…"
+                            disabled={disabledNote}
+                            onChange={(e) => {
+                              noteDraftRef.current[r.id] = e.target.value;
+                            }}
+                            onBlur={async (e) => {
+                              const next = e.currentTarget.value ?? "";
+                              const prev = r.nota ?? "";
+                              if (String(next).trim() === String(prev).trim()) return;
+                              await saveNota(r.id, next);
+                            }}
+                            style={{
+                              width: 240,
+                              padding: "10px 12px",
+                              borderRadius: 12,
+                              border: "1px solid #d4d4d4",
+                              fontWeight: 800,
+                              background: disabledNote ? "#f1f5f9" : "white",
+                              opacity: disabledNote ? 0.85 : 1,
+                              cursor: disabledNote ? "not-allowed" : "text",
+                            }}
+                          />
+                          {savingNoteRowId === r.id ? (
                             <div style={{ marginTop: 6, fontSize: 12, fontWeight: 800, opacity: 0.75 }}>Salvo…</div>
                           ) : null}
                         </td>

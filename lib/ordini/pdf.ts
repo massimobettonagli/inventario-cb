@@ -1,11 +1,12 @@
 // lib/ordini/pdf.ts
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb, PDFFont } from "pdf-lib";
 import QRCode from "qrcode";
 
 type PdfRiga = {
   codiceProdotto: string;
   descrizioneSnap: string | null;
   qty: number;
+  nota: string | null; // ✅ NUOVO
 };
 
 export type PdfOrdine = {
@@ -24,9 +25,73 @@ function safeFileName(s: string) {
     .slice(0, 80);
 }
 
-export async function buildOrdinePdfBuffer(
-  order: PdfOrdine
-): Promise<{ pdf: Uint8Array; filename: string }> {
+/**
+ * Wrap “semplice” basato su width reale del font.
+ * Non spezza parole a metà (se una parola è troppo lunga la tronca).
+ */
+function wrapText(opts: {
+  text: string;
+  font: PDFFont;
+  fontSize: number;
+  maxWidth: number;
+  maxLines?: number;
+}) {
+  const { font, fontSize, maxWidth } = opts;
+  const maxLines = opts.maxLines ?? 999;
+
+  const raw = String(opts.text ?? "").replace(/\r/g, "").replace(/\n+/g, "\n").trim();
+  if (!raw) return ["—"];
+
+  const paragraphs = raw.split("\n");
+  const out: string[] = [];
+
+  const widthOf = (t: string) => font.widthOfTextAtSize(t, fontSize);
+
+  for (const p of paragraphs) {
+    const words = p.trim().split(/\s+/).filter(Boolean);
+    if (words.length === 0) {
+      out.push("—");
+      continue;
+    }
+
+    let line = "";
+
+    for (const w of words) {
+      const next = line ? `${line} ${w}` : w;
+
+      if (widthOf(next) <= maxWidth) {
+        line = next;
+        continue;
+      }
+
+      // chiudi la riga corrente
+      if (line) out.push(line);
+
+      // parola troppo lunga: tronca
+      if (widthOf(w) > maxWidth) {
+        let cut = w;
+        while (cut.length > 1 && widthOf(cut + "…") > maxWidth) cut = cut.slice(0, -1);
+        out.push(cut.length < w.length ? cut + "…" : cut);
+        line = "";
+      } else {
+        line = w;
+      }
+
+      if (out.length >= maxLines) break;
+    }
+
+    if (out.length >= maxLines) break;
+    if (line) out.push(line);
+
+    if (out.length >= maxLines) break;
+  }
+
+  // Se abbiamo tagliato per maxLines, aggiungi ellissi all’ultima riga (se serve)
+  if (out.length > maxLines) out.length = maxLines;
+  return out.slice(0, maxLines);
+}
+
+export async function buildOrdinePdfBuffer(order: PdfOrdine): Promise<{ pdf: Uint8Array; filename: string }> {
   const pdfDoc = await PDFDocument.create();
 
   // A4 in points
@@ -107,14 +172,17 @@ export async function buildOrdinePdfBuffer(
   const tableX = margin;
   const tableW = A4.width - margin * 2;
 
-  const colCod = 120;
-  const colQty = 60;
+  // Colonne (aggiunta Nota)
+  const colCod = 110;
+  const colQty = 48;
   const colQr = 56;
-  const colDesc = tableW - colCod - colQty - colQr;
+  const colNota = 120;
+  const colDesc = tableW - colCod - colNota - colQty - colQr;
 
-  const headerH = 24;
+  const headerH = 28;
 
   const drawTableHeader = () => {
+    // Titoli
     page.drawText("Codice", { x: tableX, y, size: 10, font: fontBold, color: text });
 
     page.drawText("Descrizione", {
@@ -125,8 +193,16 @@ export async function buildOrdinePdfBuffer(
       color: text,
     });
 
+    page.drawText("Nota", {
+      x: tableX + colCod + colDesc,
+      y,
+      size: 10,
+      font: fontBold,
+      color: text,
+    });
+
     page.drawText("Qty", {
-      x: tableX + colCod + colDesc + colQty - 18,
+      x: tableX + colCod + colDesc + colNota + colQty - 18,
       y,
       size: 10,
       font: fontBold,
@@ -134,7 +210,7 @@ export async function buildOrdinePdfBuffer(
     });
 
     page.drawText("QR", {
-      x: tableX + colCod + colDesc + colQty + Math.round((colQr - 14) / 2),
+      x: tableX + colCod + colDesc + colNota + colQty + Math.round((colQr - 14) / 2),
       y,
       size: 10,
       font: fontBold,
@@ -150,8 +226,8 @@ export async function buildOrdinePdfBuffer(
 
   // ===== ROW SETTINGS =====
   const qrSize = 28;
-  const rowH = 46;
-  const rowPaddingTop = 20;
+  const fontSizeRow = 9.5;
+  const lineHeight = 12;
 
   async function makeQrPng(textValue: string) {
     return QRCode.toBuffer(textValue, {
@@ -164,46 +240,87 @@ export async function buildOrdinePdfBuffer(
 
   // ===== ROWS =====
   for (const r of order.righe) {
+    const desc = (r.descrizioneSnap ?? "—").trim();
+    const nota = (r.nota ?? "").trim();
+
+    const descLines = wrapText({
+      text: desc || "—",
+      font: fontRegular,
+      fontSize: fontSizeRow,
+      maxWidth: colDesc - 8,
+      maxLines: 4,
+    });
+
+    const notaLines = wrapText({
+      text: nota || "—",
+      font: fontRegular,
+      fontSize: fontSizeRow,
+      maxWidth: colNota - 8,
+      maxLines: 4,
+    });
+
+    const maxTextLines = Math.max(descLines.length, notaLines.length, 1);
+
+    // Altezza riga dinamica: spazio sopra + testo + spazio sotto, e comunque almeno per QR
+    const textBlockH = maxTextLines * lineHeight;
+    const rowH = Math.max(46, textBlockH + 22, qrSize + 18);
+
     if (ensureSpace(rowH + headerH)) drawTableHeader();
 
-    const rowTopY = y - rowPaddingTop;
+    const rowTopY = y - 16; // baseline di partenza testo
 
+    // Codice
     page.drawText(r.codiceProdotto, {
       x: tableX,
       y: rowTopY,
       size: 10,
       font: fontBold,
       color: text,
-      maxWidth: colCod,
+      maxWidth: colCod - 6,
     });
 
-    const desc = (r.descrizioneSnap ?? "—").trim();
-    page.drawText(desc, {
-      x: tableX + colCod,
-      y: rowTopY,
-      size: 10,
-      font: fontRegular,
-      color: text,
-      maxWidth: colDesc,
-      lineHeight: 12,
-    });
+    // Descrizione (multiline)
+    for (let i = 0; i < descLines.length; i++) {
+      page.drawText(descLines[i], {
+        x: tableX + colCod,
+        y: rowTopY - i * lineHeight,
+        size: fontSizeRow,
+        font: fontRegular,
+        color: text,
+      });
+    }
 
+    // Nota (multiline)
+    for (let i = 0; i < notaLines.length; i++) {
+      page.drawText(notaLines[i], {
+        x: tableX + colCod + colDesc,
+        y: rowTopY - i * lineHeight,
+        size: fontSizeRow,
+        font: fontRegular,
+        color: text,
+      });
+    }
+
+    // Qty
     page.drawText(String(r.qty ?? 0), {
-      x: tableX + colCod + colDesc + colQty - 10,
+      x: tableX + colCod + colDesc + colNota + colQty - 10,
       y: rowTopY,
       size: 10,
       font: fontBold,
       color: text,
     });
 
+    // QR
     const qrPng = await makeQrPng(r.codiceProdotto);
     const qrImg = await pdfDoc.embedPng(qrPng);
 
-    const qrX = tableX + colCod + colDesc + colQty + Math.round((colQr - qrSize) / 2);
-    const qrY = rowTopY - Math.round((rowH - qrSize) / 2) + 2;
+    const qrX = tableX + colCod + colDesc + colNota + colQty + Math.round((colQr - qrSize) / 2);
+    // centra verticalmente nel blocco riga
+    const qrY = y - rowH + Math.round((rowH - qrSize) / 2);
 
     page.drawImage(qrImg, { x: qrX, y: qrY, width: qrSize, height: qrSize });
 
+    // Riga successiva
     y -= rowH;
     drawHr();
     y -= 12;
